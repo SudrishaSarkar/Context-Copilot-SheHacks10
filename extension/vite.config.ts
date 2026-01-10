@@ -1,7 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { resolve, dirname } from "path";
-import { copyFileSync } from "fs";
+import { copyFileSync, readFileSync, writeFileSync } from "fs";
 import { fileURLToPath } from "url";
 
 // ESM-compatible __dirname
@@ -9,6 +9,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 export default defineConfig({
+  base: "./", // Use relative paths for Chrome extension
   plugins: [
     react(),
     {

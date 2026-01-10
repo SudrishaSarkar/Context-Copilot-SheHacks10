@@ -1,0 +1,17 @@
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+build/
+**/build/
+.env
+.DS_Store
+
+
+
+# dependencies
+**/node_modules/
+
+# build outputs
+extension/dist/
+server/dist/

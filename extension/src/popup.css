@@ -13,7 +13,8 @@ body {
 
 .popup-container {
   width: 500px;
-  max-height: 600px;
+  min-height: 400px;
+  max-height: 700px;
   display: flex;
   flex-direction: column;
 }
@@ -63,26 +64,49 @@ body {
   cursor: not-allowed;
 }
 
-.ask-button {
-  width: 100%;
+.button-group {
+  display: flex;
+  gap: 8px;
+}
+
+.ask-button,
+.summarize-button {
+  flex: 1;
   padding: 10px 16px;
-  background: #2563eb;
-  color: white;
   border: none;
   border-radius: 6px;
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: all 0.2s;
+}
+
+.ask-button {
+  background: #2563eb;
+  color: white;
 }
 
 .ask-button:hover:not(:disabled) {
   background: #1d4ed8;
 }
 
-.ask-button:disabled {
-  background: #9ca3af;
+.summarize-button {
+  background: #f3f4f6;
+  color: #374151;
+  border: 1px solid #d1d5db;
+}
+
+.summarize-button:hover:not(:disabled) {
+  background: #e5e7eb;
+  border-color: #9ca3af;
+}
+
+.ask-button:disabled,
+.summarize-button:disabled {
+  background: #f3f4f6;
+  color: #9ca3af;
   cursor: not-allowed;
+  border-color: #e5e7eb;
 }
 
 .error-message {
@@ -164,30 +188,63 @@ body {
   margin-bottom: 8px;
   cursor: pointer;
   transition: all 0.2s;
+  position: relative;
 }
 
 .citation-item:hover {
   background: #f3f4f6;
   border-color: #2563eb;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.15);
+  transform: translateY(-1px);
+}
+
+.citation-item::before {
+  content: "📍";
+  position: absolute;
+  left: -8px;
+  top: 12px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.citation-item:hover::before {
+  opacity: 1;
 }
 
 .citation-quote {
   font-size: 13px;
   color: #4b5563;
   font-style: italic;
-  margin-bottom: 6px;
-  line-height: 1.5;
+  margin-bottom: 8px;
+  line-height: 1.6;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.citation-metadata {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  font-size: 11px;
+  color: #6b7280;
+}
+
+.citation-page {
+  background: #dbeafe;
+  color: #1e40af;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-weight: 500;
 }
 
 .citation-hint {
-  font-size: 12px;
   color: #6b7280;
-  margin-top: 4px;
 }
 
 .citation-confidence {
-  font-size: 11px;
   color: #9ca3af;
-  margin-top: 4px;
+  font-style: italic;
 }

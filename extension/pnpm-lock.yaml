@@ -15,6 +15,9 @@ importers:
         specifier: ^18.2.0
         version: 18.3.1(react@18.3.1)
     devDependencies:
+      '@rollup/rollup-darwin-x64':
+        specifier: ^4.55.1
+        version: 4.55.1
       '@types/chrome':
         specifier: ^0.0.254
         version: 0.0.254
@@ -818,8 +821,7 @@ snapshots:
   '@rollup/rollup-darwin-arm64@4.55.1':
     optional: true
 
-  '@rollup/rollup-darwin-x64@4.55.1':
-    optional: true
+  '@rollup/rollup-darwin-x64@4.55.1': {}
 
   '@rollup/rollup-freebsd-arm64@4.55.1':
     optional: true
