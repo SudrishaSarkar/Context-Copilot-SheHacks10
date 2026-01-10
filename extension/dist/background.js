@@ -1,0 +1,1 @@
+chrome.runtime.onInstalled.addListener(()=>{console.log("ContextCopilot extension installed")});chrome.runtime.onConnect.addListener(e=>{e.onDisconnect.addListener(()=>{console.log("Port disconnected")})});

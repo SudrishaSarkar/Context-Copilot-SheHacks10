@@ -1,0 +1,193 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 14px;
+  color: #333;
+  background: #fff;
+}
+
+.popup-container {
+  width: 500px;
+  max-height: 600px;
+  display: flex;
+  flex-direction: column;
+}
+
+.popup-header {
+  padding: 16px 20px;
+  background: #2563eb;
+  color: white;
+  border-bottom: 1px solid #1e40af;
+}
+
+.popup-header h1 {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.popup-content {
+  padding: 20px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.question-section {
+  margin-bottom: 20px;
+}
+
+.question-input {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 14px;
+  font-family: inherit;
+  resize: vertical;
+  margin-bottom: 12px;
+}
+
+.question-input:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.question-input:disabled {
+  background: #f3f4f6;
+  cursor: not-allowed;
+}
+
+.ask-button {
+  width: 100%;
+  padding: 10px 16px;
+  background: #2563eb;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.ask-button:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
+.ask-button:disabled {
+  background: #9ca3af;
+  cursor: not-allowed;
+}
+
+.error-message {
+  padding: 12px;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  color: #991b1b;
+  margin-bottom: 20px;
+}
+
+.loading {
+  text-align: center;
+  padding: 40px 20px;
+}
+
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid #e5e7eb;
+  border-top-color: #2563eb;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin: 0 auto 12px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.loading p {
+  color: #6b7280;
+  font-size: 14px;
+}
+
+.answer-section {
+  margin-top: 20px;
+}
+
+.answer-section h2 {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: #111827;
+}
+
+.answer-text {
+  padding: 16px;
+  background: #f9fafb;
+  border-radius: 6px;
+  line-height: 1.6;
+  color: #374151;
+  margin-bottom: 20px;
+  white-space: pre-wrap;
+}
+
+.citations-section {
+  margin-top: 24px;
+}
+
+.citations-section h3 {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: #111827;
+}
+
+.citations-list {
+  list-style: none;
+}
+
+.citation-item {
+  padding: 12px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.citation-item:hover {
+  background: #f3f4f6;
+  border-color: #2563eb;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.citation-quote {
+  font-size: 13px;
+  color: #4b5563;
+  font-style: italic;
+  margin-bottom: 6px;
+  line-height: 1.5;
+}
+
+.citation-hint {
+  font-size: 12px;
+  color: #6b7280;
+  margin-top: 4px;
+}
+
+.citation-confidence {
+  font-size: 11px;
+  color: #9ca3af;
+  margin-top: 4px;
+}
