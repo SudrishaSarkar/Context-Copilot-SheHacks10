@@ -15,6 +15,18 @@ import type {
   Citation,
   PagePayload,
 } from "./types.js";
+// Feature handlers
+import { handleSummarize } from "./features/summarize/handler.js";
+import { handleKeyPoints } from "./features/key-points/handler.js";
+import { handleExplainLike5 } from "./features/explain-like-5/handler.js";
+import { handleActionItems } from "./features/action-items/handler.js";
+// Schemas
+import {
+  SummarizeRequestSchema,
+  KeyPointsRequestSchema,
+  ExplainLike5RequestSchema,
+  ActionItemsRequestSchema,
+} from "./utils/schemas.js";
 
 // Ensure .env is loaded from the correct directory (try multiple paths)
 const __filename = fileURLToPath(import.meta.url);
@@ -77,7 +89,9 @@ const AskRequestSchema = z.object({
   }),
 });
 
-const SummarizeRequestSchema = z.object({
+// Legacy schema for old endpoints that use "format" instead of "detailLevel"
+// (kept for backward compatibility with /summarize-and-export and /preview)
+const LegacySummarizeRequestSchema = z.object({
   page: z.object({
     url: z.string(),
     title: z.string(),
@@ -618,27 +632,120 @@ Provide a clear, accurate answer and include relevant quotes or references if po
   }
 });
 
-// New /summarize endpoint
+// Summarize endpoint (modular)
 app.post("/summarize", async (req, res) => {
   try {
     const validated = SummarizeRequestSchema.parse(req.body);
-    const { page, format } = validated;
+    const { page, detailLevel } = validated;
 
     console.log(
-      `Summarizing ${page.contentType} document: "${page.title}" (format: ${format})`
+      `Summarizing ${page.contentType} document: "${page.title}" (detailLevel: ${detailLevel})`
     );
 
-    const summary = await summarizeWithGemini(page, format);
+    const summary = await handleSummarize(page, detailLevel);
 
     res.json({
       summary,
-      format,
+      detailLevel,
       title: page.title,
       url: page.url,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
     console.error("Error in /summarize:", error);
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: "Invalid request", details: error.errors });
+    } else {
+      res.status(500).json({
+        error: "Internal server error",
+        message: (error as Error).message,
+      });
+    }
+  }
+});
+
+// Key Points endpoint
+app.post("/key-points", async (req, res) => {
+  try {
+    const validated = KeyPointsRequestSchema.parse(req.body);
+    const { page } = validated;
+
+    console.log(
+      `Extracting key points from ${page.contentType} document: "${page.title}"`
+    );
+
+    const keyPoints = await handleKeyPoints(page);
+
+    res.json({
+      keyPoints,
+      title: page.title,
+      url: page.url,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Error in /key-points:", error);
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: "Invalid request", details: error.errors });
+    } else {
+      res.status(500).json({
+        error: "Internal server error",
+        message: (error as Error).message,
+      });
+    }
+  }
+});
+
+// Explain Like I'm 5 endpoint
+app.post("/explain-like-5", async (req, res) => {
+  try {
+    const validated = ExplainLike5RequestSchema.parse(req.body);
+    const { page } = validated;
+
+    console.log(
+      `Explaining ${page.contentType} document: "${page.title}" (like I'm 5)`
+    );
+
+    const explanation = await handleExplainLike5(page);
+
+    res.json({
+      explanation,
+      title: page.title,
+      url: page.url,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Error in /explain-like-5:", error);
+    if (error instanceof z.ZodError) {
+      res.status(400).json({ error: "Invalid request", details: error.errors });
+    } else {
+      res.status(500).json({
+        error: "Internal server error",
+        message: (error as Error).message,
+      });
+    }
+  }
+});
+
+// Action Items endpoint
+app.post("/action-items", async (req, res) => {
+  try {
+    const validated = ActionItemsRequestSchema.parse(req.body);
+    const { page } = validated;
+
+    console.log(
+      `Extracting action items from ${page.contentType} document: "${page.title}"`
+    );
+
+    const actionItems = await handleActionItems(page);
+
+    res.json({
+      actionItems,
+      title: page.title,
+      url: page.url,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Error in /action-items:", error);
     if (error instanceof z.ZodError) {
       res.status(400).json({ error: "Invalid request", details: error.errors });
     } else {
@@ -691,7 +798,7 @@ app.post("/export-pdf", async (req, res) => {
 // Combined summarize + export endpoint (for convenience)
 app.post("/summarize-and-export", async (req, res) => {
   try {
-    const validated = SummarizeRequestSchema.extend({
+    const validated = LegacySummarizeRequestSchema.extend({
       saveToDownloads: z.boolean().default(false),
     }).parse(req.body);
     const { page, format, saveToDownloads } = validated;
@@ -746,7 +853,7 @@ app.post("/preview", async (req, res) => {
     const { action, ...rest } = req.body;
 
     if (action === "summarize") {
-      const validated = SummarizeRequestSchema.parse(rest);
+      const validated = LegacySummarizeRequestSchema.parse(rest);
       const { page, format } = validated;
 
       const summary = await summarizeWithGemini(page, format);
@@ -812,7 +919,10 @@ app.get("/", (req, res) => {
     endpoints: {
       "GET /health": "Health check endpoint",
       "POST /ask": "Ask questions about page content",
-      "POST /summarize": "Summarize/extract/bullet point page content",
+      "POST /summarize": "Summarize page content (brief or detailed)",
+      "POST /key-points": "Extract key takeaways as bullet points",
+      "POST /explain-like-5": "Explain content in simple terms with analogies",
+      "POST /action-items": "Extract actionable items and tasks",
       "POST /export-pdf": "Generate PDF from summary text",
       "POST /summarize-and-export": "Summarize and export to PDF in one call",
       "POST /preview":
