@@ -1,7 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { resolve, dirname } from "path";
-import { copyFileSync, existsSync, mkdirSync } from "fs";
+import { copyFileSync, existsSync, mkdirSync, cpSync } from "fs";
 import { fileURLToPath } from "url";
 
 // ESM-compatible __dirname
@@ -28,6 +28,16 @@ export default defineConfig({
             mkdirSync(workerDir, { recursive: true });
           }
           copyFileSync(workerPath, resolve(workerDir, "pdf.worker.min.mjs"));
+        }
+        
+        // Copy icons directory if it exists
+        const iconsSourcePath = resolve(__dirname, "public/icons");
+        const iconsDestPath = resolve(__dirname, "dist/icons");
+        if (existsSync(iconsSourcePath)) {
+          if (!existsSync(iconsDestPath)) {
+            mkdirSync(iconsDestPath, { recursive: true });
+          }
+          cpSync(iconsSourcePath, iconsDestPath, { recursive: true });
         }
       },
     },

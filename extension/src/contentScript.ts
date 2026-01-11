@@ -184,6 +184,66 @@ function extractGitHubContent(): { text: string; structure: PagePayload["structu
   return { text, structure };
 }
 
+// Extract YouTube transcript (only if transcript panel is open)
+function extractYouTubeTranscript(): string {
+  // YouTube transcript panel selectors (common patterns)
+  // Try different selectors as YouTube may change them
+  const transcriptSelectors = [
+    "ytd-transcript-body-renderer",
+    "ytd-transcript-search-panel-renderer",
+    "[id*='transcript']",
+    ".ytd-transcript-body-renderer",
+  ];
+
+  let transcriptText = "";
+
+  // Try to find transcript container
+  for (const selector of transcriptSelectors) {
+    const transcriptContainer = document.querySelector(selector);
+    if (transcriptContainer) {
+      // Extract text from transcript segments
+      const segments = transcriptContainer.querySelectorAll(
+        "ytd-transcript-segment-renderer, .segment-text, [class*='segment']"
+      );
+      
+      if (segments.length > 0) {
+        segments.forEach((segment) => {
+          const text = segment.textContent?.trim() || "";
+          if (text) {
+            transcriptText += text + " ";
+          }
+        });
+        break;
+      } else {
+        // Fallback: get all text from container
+        transcriptText = transcriptContainer.textContent || "";
+        if (transcriptText.trim().length > 50) {
+          break;
+        }
+      }
+    }
+  }
+
+  // If no transcript found via selectors, try searching for common transcript text patterns
+  if (!transcriptText.trim()) {
+    // Look for any element containing transcript-like content
+    const allElements = document.querySelectorAll("*");
+    for (const el of allElements) {
+      const text = el.textContent || "";
+      // Heuristic: transcript segments usually have timestamps and text
+      if (text.match(/\d{1,2}:\d{2}/) && text.length > 100 && text.length < 50000) {
+        const parent = el.closest('[id*="transcript"], [class*="transcript"]');
+        if (parent) {
+          transcriptText = parent.textContent || "";
+          break;
+        }
+      }
+    }
+  }
+
+  return transcriptText.trim();
+}
+
 // Extract content from StackOverflow pages
 function extractStackOverflowContent(): { text: string; structure: PagePayload["structure"] } {
   let text = "";
@@ -313,10 +373,16 @@ function cleanText(text: string, maxLength: number = 80000): string {
 }
 
 // Detect site type
-function detectSiteHint(url: string): "github" | "stackoverflow" | "generic" {
+function detectSiteHint(url: string): "github" | "stackoverflow" | "youtube" | "generic" {
   if (url.includes("github.com")) return "github";
   if (url.includes("stackoverflow.com") || url.includes("stackexchange.com")) return "stackoverflow";
+  if (url.includes("youtube.com/watch") || url.includes("youtu.be/")) return "youtube";
   return "generic";
+}
+
+// Check if URL is a YouTube watch page
+function isYouTubeWatchPage(url: string): boolean {
+  return url.includes("youtube.com/watch") || url.includes("youtu.be/");
 }
 
 async function getPagePayload(): Promise<PagePayload> {
@@ -357,6 +423,17 @@ async function getPagePayload(): Promise<PagePayload> {
     const soContent = extractStackOverflowContent();
     mainText = soContent.text;
     structure = soContent.structure;
+  } else if (siteHint === "youtube") {
+    // For YouTube, try to extract transcript if available
+    const transcript = extractYouTubeTranscript();
+    if (transcript) {
+      mainText = transcript;
+    } else {
+      // Fallback to page title and description
+      const title = document.querySelector("h1.ytd-watch-metadata yt-formatted-string, h1.title yt-formatted-string")?.textContent || "";
+      const description = document.querySelector("#description-text, ytd-video-secondary-info-renderer")?.textContent || "";
+      mainText = (title ? `Title: ${title}\n\n` : "") + (description ? `Description: ${description}` : "");
+    }
   } else {
     // Generic HTML extraction
     mainText = document.body.textContent || "";
