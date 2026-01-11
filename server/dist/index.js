@@ -31,6 +31,9 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "50mb" })); // Increase limit for base64 images
 const PORT = 8787;
+// Gemini model name - can be overridden with GEMINI_MODEL env var
+// Current recommended model: gemini-2.5-flash
+const GEMINI_MODEL = process.env.GEMINI_MODEL ?? "gemini-2.5-flash";
 const AskRequestSchema = z.object({
     question: z.string(),
     page: z.object({
@@ -110,7 +113,10 @@ function selectTopChunks(mainText, question, topN = 6) {
         idx,
     }));
     scored.sort((a, b) => b.score - a.score);
-    return scored.slice(0, topN).map((s) => s.chunk).join("\n\n---\n\n");
+    return scored
+        .slice(0, topN)
+        .map((s) => s.chunk)
+        .join("\n\n---\n\n");
 }
 async function callGemini(context, question) {
     const apiKey = process.env.GEMINI_API_KEY;
@@ -118,7 +124,7 @@ async function callGemini(context, question) {
         throw new Error("GEMINI_API_KEY not set in environment");
     }
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
     const prompt = `You are a helpful assistant that answers questions based ONLY on the provided text below.
 
 PROVIDED TEXT:
@@ -151,7 +157,10 @@ Return ONLY the JSON object, no markdown formatting, no explanation, just the ra
         // Try to extract JSON from the response
         let jsonText = text.trim();
         // Remove markdown code blocks if present
-        jsonText = jsonText.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+        jsonText = jsonText
+            .replace(/```json\n?/g, "")
+            .replace(/```\n?/g, "")
+            .trim();
         const parsed = JSON.parse(jsonText);
         // Validate structure
         if (!parsed.answer || !Array.isArray(parsed.citations)) {
@@ -191,7 +200,7 @@ async function callGeminiVision(imageBase64, prompt) {
         throw new Error("GEMINI_API_KEY not set in environment");
     }
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-pro-vision" });
+    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
     // Convert base64 to buffer
     const imageBuffer = Buffer.from(imageBase64, "base64");
     // Determine MIME type from base64 prefix
@@ -239,7 +248,11 @@ function getSummarizePrompt(contentType, format) {
     };
     const basePrompt = `You are an expert document analysis assistant. Your task is to analyze the provided document and create a clear, concise output that makes complex information easy to understand.
 
-DOCUMENT TYPE: ${contentType === "pdf_image" ? "Scanned/Image-based document" : contentType === "pdf_text" ? "Text-based PDF document" : "Web page"}
+DOCUMENT TYPE: ${contentType === "pdf_image"
+        ? "Scanned/Image-based document"
+        : contentType === "pdf_text"
+            ? "Text-based PDF document"
+            : "Web page"}
 
 OUTPUT FORMAT: ${formatInstructions[format]}
 
@@ -279,7 +292,7 @@ Please analyze this document image and provide the requested output format.`;
         }
         else {
             // Use text API for text-based content
-            const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+            const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
             // If selectedText exists, use it; otherwise use mainText (chunked if too long)
             let content = page.selectedText || page.mainText;
             // If content is too long, summarize in chunks
@@ -315,7 +328,11 @@ DOCUMENT CONTENT:
 ${content}
 
 PROVIDED TEXT (if applicable):
-${page.structure ? `\nDocument Structure:\n${page.structure.map((s) => `- ${s.title}${s.page ? ` (Page ${s.page})` : ""}`).join("\n")}` : ""}
+${page.structure
+                    ? `\nDocument Structure:\n${page.structure
+                        .map((s) => `- ${s.title}${s.page ? ` (Page ${s.page})` : ""}`)
+                        .join("\n")}`
+                    : ""}
 
 Please analyze this content and provide the output in the requested format.`;
                 const result = await model.generateContent(prompt);
@@ -383,7 +400,11 @@ function generatePDF(summary, title, format) {
                             /^[A-Z][a-z]+([\s][A-Z][a-z]+)+$/.test(trimmed) ||
                             trimmed.startsWith("##") ||
                             trimmed.startsWith("#"))) {
-                        doc.moveDown(0.5).fontSize(14).font("Helvetica-Bold").text(trimmed, {
+                        doc
+                            .moveDown(0.5)
+                            .fontSize(14)
+                            .font("Helvetica-Bold")
+                            .text(trimmed, {
                             continued: false,
                         });
                         doc.fontSize(12).font("Helvetica").moveDown(0.3);
@@ -483,7 +504,10 @@ app.post("/summarize", async (req, res) => {
             res.status(400).json({ error: "Invalid request", details: error.errors });
         }
         else {
-            res.status(500).json({ error: "Internal server error", message: error.message });
+            res.status(500).json({
+                error: "Internal server error",
+                message: error.message,
+            });
         }
     }
 });
@@ -558,7 +582,10 @@ app.post("/summarize-and-export", async (req, res) => {
             res.status(400).json({ error: "Invalid request", details: error.errors });
         }
         else {
-            res.status(500).json({ error: "Internal server error", message: error.message });
+            res.status(500).json({
+                error: "Internal server error",
+                message: error.message,
+            });
         }
     }
 });
@@ -613,7 +640,10 @@ app.post("/preview", async (req, res) => {
             res.status(400).json({ error: "Invalid request", details: error.errors });
         }
         else {
-            res.status(500).json({ error: "Internal server error", message: error.message });
+            res.status(500).json({
+                error: "Internal server error",
+                message: error.message,
+            });
         }
     }
 });
@@ -639,7 +669,7 @@ app.listen(PORT, () => {
     if (!process.env.GEMINI_API_KEY) {
         console.error("\n❌ ERROR: GEMINI_API_KEY is missing!");
         console.error("   I looked for the .env file in these locations:");
-        possiblePaths.forEach(p => {
+        possiblePaths.forEach((p) => {
             const exists = fs.existsSync(p);
             console.error(`   - ${p} [${exists ? "FOUND" : "NOT FOUND"}]`);
         });

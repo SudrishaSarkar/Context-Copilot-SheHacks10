@@ -4,6 +4,63 @@ import type { PagePayload, AskResponse, ExtensionMessage } from "./types";
 const API_URL = "http://localhost:8787/ask";
 const SUMMARIZE_API_URL = "http://localhost:8787/summarize";
 
+// Clean and format summary text - remove markdown symbols and format nicely
+function formatSummary(text: string): string {
+  if (!text) return "";
+  
+  let cleaned = text;
+  
+  // Remove markdown headers (###, ##, #)
+  cleaned = cleaned.replace(/^#{1,6}\s+/gm, "");
+  
+  // Remove markdown bold/italic markers but keep the text
+  cleaned = cleaned.replace(/\*\*([^*]+)\*\*/g, "$1");
+  cleaned = cleaned.replace(/\*([^*]+)\*/g, "$1");
+  cleaned = cleaned.replace(/__([^_]+)__/g, "$1");
+  cleaned = cleaned.replace(/_([^_]+)_/g, "$1");
+  
+  // Remove markdown code blocks
+  cleaned = cleaned.replace(/```[\s\S]*?```/g, "");
+  cleaned = cleaned.replace(/`([^`]+)`/g, "$1");
+  
+  // Remove markdown links but keep text
+  cleaned = cleaned.replace(/\[([^\]]+)\]\([^\)]+\)/g, "$1");
+  
+  // Convert markdown bullets to clean bullets (preserve indentation)
+  cleaned = cleaned.replace(/^[\*\-\+]\s+/gm, "• ");
+  
+  // Convert numbered lists to clean format
+  cleaned = cleaned.replace(/^\d+[\.\)]\s+/gm, "");
+  
+  // Remove extra symbols and formatting
+  cleaned = cleaned.replace(/[●○▪▫]/g, "•"); // Normalize bullet types
+  cleaned = cleaned.replace(/[—–]/g, "-"); // Normalize dashes
+  
+  // Clean up multiple spaces
+  cleaned = cleaned.replace(/  +/g, " ");
+  
+  // Clean up multiple newlines (max 2 consecutive)
+  cleaned = cleaned.replace(/\n{3,}/g, "\n\n");
+  
+  // Remove leading/trailing symbols from lines
+  cleaned = cleaned
+    .split("\n")
+    .map((line) => {
+      let trimmed = line.trim();
+      // Remove leading symbols that aren't bullets
+      trimmed = trimmed.replace(/^[^\w•\-]+/, "");
+      return trimmed;
+    })
+    .filter((line) => line.length > 0) // Remove empty lines
+    .join("\n");
+  
+  // Final cleanup - remove any remaining markdown artifacts
+  cleaned = cleaned.replace(/\[|\]/g, ""); // Remove square brackets
+  cleaned = cleaned.replace(/\(\)/g, ""); // Remove empty parentheses
+  
+  return cleaned.trim();
+}
+
 export default function Popup() {
   const [question, setQuestion] = useState("");
   const [loading, setLoading] = useState(false);
@@ -109,7 +166,9 @@ export default function Popup() {
       }
 
       const data = await response.json();
-      setSummary(data.summary);
+      // Clean and format the summary
+      const formattedSummary = formatSummary(data.summary);
+      setSummary(formattedSummary);
     } catch (err) {
       console.error("Error:", err);
       setError(err instanceof Error ? err.message : "Failed to generate summary");
@@ -178,7 +237,7 @@ export default function Popup() {
         {summary && (
           <div className="answer-section">
             <h2>Summary</h2>
-            <div className="answer-text">{summary}</div>
+            <div className="answer-text summary-text">{summary}</div>
           </div>
         )}
 
