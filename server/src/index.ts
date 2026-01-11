@@ -9,11 +9,13 @@ import path from "path";
 import os from "os";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
+import multer from "multer";
 import type {
   AskRequest,
   AskResponse,
   Citation,
   PagePayload,
+  TranscribeResponse,
 } from "./types.js";
 // Feature handlers
 import { handleSummarize } from "./features/summarize/handler.js";
@@ -59,8 +61,24 @@ for (const p of possiblePaths) {
 }
 
 const app = express();
-app.use(cors());
+// CORS configuration - allow dashboard (port 3002) and extension
+app.use(
+  cors({
+    origin: [
+      "http://localhost:3002",
+      "http://127.0.0.1:3002",
+      "chrome-extension://*",
+    ],
+    credentials: true,
+  })
+);
 app.use(express.json({ limit: "50mb" })); // Increase limit for base64 images
+
+// Configure Multer for memory storage (handling audio uploads)
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB limit
+});
 
 const PORT = 8787;
 
@@ -343,6 +361,50 @@ async function callGeminiVision(
     console.error("Gemini Vision API error:", error);
     throw error;
   }
+}
+
+// ElevenLabs Speech-to-Text Integration
+async function transcribeWithElevenLabs(
+  audioBuffer: Buffer,
+  mimeType: string
+): Promise<string> {
+  const apiKey = process.env.ELEVENLABS_API_KEY;
+  if (!apiKey) {
+    throw new Error("ELEVENLABS_API_KEY not set in environment");
+  }
+
+  const apiUrl = "https://api.elevenlabs.io/v1/speech-to-text";
+
+  const formData = new FormData();
+  const blob = new Blob([audioBuffer], { type: mimeType });
+
+  // Determine extension based on mimeType
+  let ext = "wav";
+  if (mimeType.includes("webm")) ext = "webm";
+  else if (mimeType.includes("mp4")) ext = "mp4";
+  else if (mimeType.includes("mpeg") || mimeType.includes("mp3")) ext = "mp3";
+  else if (mimeType.includes("m4a")) ext = "m4a";
+
+  formData.append("file", blob, `audio.${ext}`);
+  formData.append("model_id", "scribe_v1");
+
+  const response = await fetch(apiUrl, {
+    method: "POST",
+    headers: {
+      "xi-api-key": apiKey,
+    },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(
+      `ElevenLabs STT API Error: ${response.status} ${response.statusText} - ${errorText}`
+    );
+  }
+
+  const data = (await response.json()) as { text: string };
+  return data.text;
 }
 
 // System prompt for summarization/extraction
@@ -720,6 +782,39 @@ Provide a clear, accurate answer and include relevant quotes or references if po
   }
 });
 
+// Transcribe Endpoint (Voice Ask)
+app.post("/transcribe", upload.single("audio"), async (req, res) => {
+  try {
+    console.log("🎙️ Processing /transcribe request...");
+
+    // Cast req to any to access file property added by multer
+    const file = (req as any).file;
+
+    if (!file) {
+      return res.status(400).json({ error: "No audio file provided" });
+    }
+
+    console.log(
+      `   - Received audio: ${file.size} bytes, type: ${file.mimetype}`
+    );
+    console.log("   - Calling ElevenLabs Speech-to-Text...");
+
+    const transcript = await transcribeWithElevenLabs(
+      file.buffer,
+      file.mimetype
+    );
+
+    console.log("✅ Transcription successful");
+    res.json({ transcript } as TranscribeResponse);
+  } catch (error) {
+    console.error("Error in /transcribe:", error);
+    res.status(500).json({
+      error: "Transcription failed",
+      details: (error as Error).message,
+    });
+  }
+});
+
 // Summarize endpoint (modular)
 app.post("/summarize", async (req, res) => {
   const startTime = Date.now();
@@ -1070,10 +1165,13 @@ app.get("/api/sessions/:userId", async (req, res) => {
     ]);
 
     const stats = {
-      requestTypeBreakdown: requestTypeStats.reduce((acc, item) => {
-        acc[item._id] = item.count;
-        return acc;
-      }, {} as Record<string, number>),
+      requestTypeBreakdown: requestTypeStats.reduce(
+        (acc: Record<string, number>, item: { _id: string; count: number }) => {
+          acc[item._id] = item.count;
+          return acc;
+        },
+        {} as Record<string, number>
+      ),
     };
 
     res.json({
@@ -1237,10 +1335,13 @@ app.get("/api/sessions/:userId", async (req, res) => {
     ]);
 
     const stats = {
-      requestTypeBreakdown: requestTypeStats.reduce((acc, item) => {
-        acc[item._id] = item.count;
-        return acc;
-      }, {} as Record<string, number>),
+      requestTypeBreakdown: requestTypeStats.reduce(
+        (acc: Record<string, number>, item: { _id: string; count: number }) => {
+          acc[item._id] = item.count;
+          return acc;
+        },
+        {} as Record<string, number>
+      ),
     };
 
     res.json({
@@ -1454,6 +1555,8 @@ app.get("/", (req, res) => {
     endpoints: {
       "GET /health": "Health check endpoint",
       "POST /ask": "Ask questions about page content (add userId in body)",
+      "POST /transcribe":
+        "Transcribe audio to text using ElevenLabs (multipart/form-data with 'audio' file)",
       "POST /summarize": "Summarize page content (add userId in body)",
       "POST /key-points": "Extract key takeaways (add userId in body)",
       "POST /explain-like-5":
@@ -1508,6 +1611,13 @@ async function startServer() {
             loadedEnvPath || "process environment"
           })`
         );
+        if (process.env.ELEVENLABS_API_KEY) {
+          console.log(`✓ ELEVENLABS_API_KEY is set`);
+        } else {
+          console.warn(
+            `⚠️ ELEVENLABS_API_KEY is missing! Voice transcription will fail.`
+          );
+        }
         console.log("\n🚀 Server is ready and waiting for requests...");
       }
     });

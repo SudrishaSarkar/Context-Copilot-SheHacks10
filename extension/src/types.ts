@@ -53,3 +53,7 @@ export interface HistoryItem {
 export interface HistoryResponse {
   items: HistoryItem[];
 }
+
+export interface TranscribeResponse {
+  transcript: string;
+}

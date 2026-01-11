@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from "react";
 import type { PagePayload, AskResponse, ExtensionMessage, HistoryItem, HistoryResponse } from "./types";
 import { jsPDF } from "jspdf";
+import { VoiceMic } from "./VoiceMic";
+import { getUserId } from "./utils/userId";
 
 const API_URL = "http://localhost:8787/ask";
 const SUMMARIZE_API_URL = "http://localhost:8787/summarize";
@@ -168,9 +170,6 @@ export default function Popup() {
   const [askError, setAskError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
-  const [speechRecognition, setSpeechRecognition] = useState<any>(null);
-  const [isSpeechSupported, setIsSpeechSupported] = useState(true);
   const [youtubeMessage, setYoutubeMessage] = useState<string | null>(null);
   const [emailTone, setEmailTone] = useState<string | null>(null);
   const [emailReplies, setEmailReplies] = useState<string[]>([]);
@@ -189,58 +188,6 @@ export default function Popup() {
     document.documentElement.setAttribute("data-theme", theme);
   }, []);
 
-  // Initialize speech recognition
-  useEffect(() => {
-    const SpeechRecognition = window.SpeechRecognition || (window as any).webkitSpeechRecognition;
-    
-    if (!SpeechRecognition) {
-      setIsSpeechSupported(false);
-      return;
-    }
-
-    const recognition = new SpeechRecognition();
-    recognition.lang = "en-US";
-    recognition.continuous = true;
-    recognition.interimResults = true;
-
-    recognition.onresult = (event: any) => {
-      let transcript = "";
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        transcript += event.results[i][0].transcript;
-      }
-      setQuestion((prev) => (prev ? prev + " " + transcript : transcript));
-    };
-
-    recognition.onerror = (event: any) => {
-      console.error("Speech recognition error:", event.error);
-      if (event.error === "not-allowed") {
-        setAskError("Microphone permission denied. Please allow microphone access in Chrome settings (chrome://settings/content/microphone) or click the lock icon in the address bar.");
-      } else if (event.error === "no-speech") {
-        // User stopped speaking, this is normal - don't show error
-        setIsRecording(false);
-        return;
-      } else if (event.error === "aborted") {
-        // Recognition was stopped - this is normal
-        setIsRecording(false);
-        return;
-      } else {
-        setAskError("Speech recognition error: " + event.error);
-      }
-      setIsRecording(false);
-    };
-
-    recognition.onend = () => {
-      setIsRecording(false);
-    };
-
-    setSpeechRecognition(recognition);
-
-    return () => {
-      if (recognition) {
-        recognition.stop();
-      }
-    };
-  }, []);
 
   // Fetch history when dashboard opens
   useEffect(() => {
@@ -275,40 +222,10 @@ export default function Popup() {
     localStorage.setItem("contextcopilot-theme", newTheme);
   };
 
-  // Toggle speech recognition
-  const toggleSpeechRecognition = async () => {
-    if (!speechRecognition || !isSpeechSupported) return;
-
-    if (isRecording) {
-      speechRecognition.stop();
-      setIsRecording(false);
-    } else {
-      try {
-        // Request microphone permission first if available
-        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-          try {
-            await navigator.mediaDevices.getUserMedia({ audio: true });
-          } catch (mediaErr: any) {
-            if (mediaErr.name === "NotAllowedError" || mediaErr.name === "PermissionDeniedError") {
-              setAskError("Microphone permission denied. Please allow microphone access in Chrome settings.");
-              return;
-            }
-          }
-        }
-        
-        speechRecognition.start();
-        setIsRecording(true);
-        setAskError(null); // Clear any previous errors
-      } catch (err: any) {
-        console.error("Failed to start speech recognition:", err);
-        if (err.message && err.message.includes("not allowed")) {
-          setAskError("Microphone permission denied. Please allow microphone access in Chrome settings.");
-        } else {
-          setAskError("Failed to start recording. Make sure your microphone is connected and permissions are granted.");
-        }
-        setIsRecording(false);
-      }
-    }
+  // Handle voice transcript from VoiceMic component
+  const handleVoiceTranscript = (transcript: string) => {
+    setQuestion((prev) => (prev ? prev + " " + transcript : transcript));
+    setAskError(null); // Clear any previous errors
   };
 
   const handleAsk = async (promptOverride?: string) => {
@@ -356,6 +273,7 @@ export default function Popup() {
         body: JSON.stringify({
           question: promptText,
           page: pagePayload,
+          userId: userId || undefined, // Include userId if available
         }),
       });
 
@@ -557,7 +475,8 @@ export default function Popup() {
         },
         body: JSON.stringify({
           page: pagePayload,
-          format: "summary",
+          detailLevel: "brief", // Use new detailLevel instead of format
+          userId: userId || undefined, // Include userId if available
         }),
       });
 
@@ -901,7 +820,10 @@ export default function Popup() {
             className="header-icon-button" 
             title="Open Dashboard"
             onClick={() => {
-              chrome.tabs.create({ url: DASHBOARD_URL });
+              const dashboardUrl = userId 
+                ? `${DASHBOARD_URL}/dashboard?userId=${userId}`
+                : `${DASHBOARD_URL}/dashboard`;
+              chrome.tabs.create({ url: dashboardUrl });
             }}
           >
             <ClockIcon />
@@ -934,7 +856,7 @@ export default function Popup() {
 
         {activeTab === "ask-question" && (
           <div className="question-section">
-            <div className="textarea-wrapper">
+            <div className="textarea-wrapper" style={{ position: "relative" }}>
               <textarea
                 className="question-input"
                 placeholder="Ask anything about this page..."
@@ -942,22 +864,10 @@ export default function Popup() {
                 onChange={(e) => setQuestion(e.target.value)}
                 rows={6}
                 disabled={loading || summaryLoading}
+                style={{ paddingRight: "40px" }}
               />
-              <button
-                className={`mic-button ${isRecording ? "recording" : ""}`}
-                onClick={toggleSpeechRecognition}
-                disabled={!isSpeechSupported || loading || summaryLoading}
-                title={isRecording ? "Stop recording" : "Start voice input"}
-              >
-                <MicIcon />
-                {isRecording && <span className="recording-dot"></span>}
-              </button>
+              <VoiceMic onTranscript={handleVoiceTranscript} />
             </div>
-            {!isSpeechSupported && (
-              <div className="speech-unsupported">
-                Speech recognition not supported in this browser.
-              </div>
-            )}
             {askError && <div className="error-message">{askError}</div>}
             <button
               className="ask-ai-button"

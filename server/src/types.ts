@@ -35,3 +35,7 @@ export interface AskResponse {
   answer: string;
   citations: Citation[];
 }
+
+export interface TranscribeResponse {
+  transcript: string;
+}
