@@ -1,7 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { resolve, dirname } from "path";
-import { copyFileSync } from "fs";
+import { copyFileSync, existsSync, mkdirSync } from "fs";
 import { fileURLToPath } from "url";
 
 // ESM-compatible __dirname
@@ -18,6 +18,17 @@ export default defineConfig({
           resolve(__dirname, "src/manifest.json"),
           resolve(__dirname, "dist/manifest.json")
         );
+        
+        // Copy PDF.js worker if it exists
+        const workerPath = resolve(__dirname, "node_modules/pdfjs-dist/build/pdf.worker.min.mjs");
+        if (existsSync(workerPath)) {
+          const distDir = resolve(__dirname, "dist");
+          const workerDir = resolve(distDir, "pdfjs");
+          if (!existsSync(workerDir)) {
+            mkdirSync(workerDir, { recursive: true });
+          }
+          copyFileSync(workerPath, resolve(workerDir, "pdf.worker.min.mjs"));
+        }
       },
     },
   ],

@@ -1,0 +1,14 @@
+{
+  "action": "summarize",
+  "page": {
+    "url": "https://example.com/test.pdf",
+    "title": "Test Document",
+    "contentType": "pdf_text",
+    "mainText": "This is a test document with some important information. The lease term is 12 months. Rent is $1000 per month. Security deposit is $1000. Notice period is 30 days.",
+    "meta": {
+      "siteHint": "generic"
+    }
+  },
+  "format": "bullet"
+}
+
