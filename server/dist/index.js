@@ -7,7 +7,26 @@ import PDFDocument from "pdfkit";
 import fs from "fs";
 import path from "path";
 import os from "os";
-dotenv.config();
+import { fileURLToPath } from "url";
+import { dirname } from "path";
+// Ensure .env is loaded from the correct directory (try multiple paths)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const possiblePaths = [
+    path.resolve(__dirname, "../.env"), // server/.env (relative to src)
+    path.resolve(process.cwd(), ".env"), // server/.env (relative to cwd)
+    path.resolve(__dirname, "../../.env"), // root/.env (fallback)
+];
+let loadedEnvPath = null;
+for (const p of possiblePaths) {
+    if (fs.existsSync(p)) {
+        dotenv.config({ path: p });
+        if (process.env.GEMINI_API_KEY) {
+            loadedEnvPath = p;
+            break;
+        }
+    }
+}
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "50mb" })); // Increase limit for base64 images
@@ -617,6 +636,20 @@ app.get("/health", (req, res) => {
 app.listen(PORT, () => {
     console.log(`ContextCopilot server running on http://localhost:${PORT}`);
     console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
-    console.log(`Gemini API Key: ${process.env.GEMINI_API_KEY ? "✓ Set" : "✗ Missing"}`);
+    if (!process.env.GEMINI_API_KEY) {
+        console.error("\n❌ ERROR: GEMINI_API_KEY is missing!");
+        console.error("   I looked for the .env file in these locations:");
+        possiblePaths.forEach(p => {
+            const exists = fs.existsSync(p);
+            console.error(`   - ${p} [${exists ? "FOUND" : "NOT FOUND"}]`);
+        });
+        console.error("\n   TROUBLESHOOTING:");
+        console.error("   1. If it says [FOUND], check if GEMINI_API_KEY is spelled correctly inside.");
+        console.error("   2. If all say [NOT FOUND], ensure the file is named exactly '.env' (not .env.txt).");
+    }
+    else {
+        console.log(`✓ GEMINI_API_KEY is set (loaded from ${loadedEnvPath || "process environment"})`);
+        console.log("\n🚀 Server is ready and waiting for requests...");
+    }
 });
 //# sourceMappingURL=index.js.map
