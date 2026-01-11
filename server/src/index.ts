@@ -27,6 +27,14 @@ import {
   ExplainLike5RequestSchema,
   ActionItemsRequestSchema,
 } from "./utils/schemas.js";
+// Database
+import { connectDB } from "./db/connection.js";
+import { Session } from "./db/models/Session.js";
+import { ChatHistory } from "./db/models/ChatHistory.js";
+import { Page } from "./db/models/Page.js";
+import mongoose from "mongoose";
+// History utilities
+import { getOrCreateSession, saveChatHistory } from "./utils/history.js";
 
 // Ensure .env is loaded from the correct directory (try multiple paths)
 const __filename = fileURLToPath(import.meta.url);
@@ -38,7 +46,7 @@ const possiblePaths = [
   path.resolve(__dirname, "../../.env"), // root/.env (fallback)
 ];
 
-let loadedEnvPath = null;
+let loadedEnvPath: string | null = null;
 
 for (const p of possiblePaths) {
   if (fs.existsSync(p)) {
@@ -589,9 +597,26 @@ function savePDFToDownloads(pdfBuffer: Buffer, filename: string): string {
 
 // Existing /ask endpoint
 app.post("/ask", async (req, res) => {
+  const startTime = Date.now();
+  let userId: string | undefined;
+  let sessionId: mongoose.Types.ObjectId | undefined;
+  let validated: any;
+
   try {
-    const validated = AskRequestSchema.parse(req.body);
-    const { question, page } = validated as AskRequest;
+    validated = AskRequestSchema.parse(req.body);
+    const {
+      question,
+      page,
+      userId: requestUserId,
+    } = validated as AskRequest & {
+      userId?: string;
+    };
+    userId = requestUserId;
+
+    // Get or create session if userId provided
+    if (userId) {
+      sessionId = await getOrCreateSession(userId);
+    }
 
     let context: string;
 
@@ -601,10 +626,27 @@ app.post("/ask", async (req, res) => {
 
 Provide a clear, accurate answer and include relevant quotes or references if possible.`;
       const answer = await callGeminiVision(page.imageBase64, visionPrompt);
-      return res.json({
-        answer,
-        citations: [],
-      });
+
+      const response = { answer, citations: [] };
+
+      // Save history if userId provided
+      if (userId && sessionId) {
+        const responseTime = Date.now() - startTime;
+        saveChatHistory({
+          userId,
+          sessionId,
+          requestType: "ask",
+          page,
+          input: {
+            question,
+            mainTextPreview: page.mainText.substring(0, 500),
+          },
+          output: { answer },
+          responseTime,
+        }).catch((err) => console.error("Failed to save history:", err));
+      }
+
+      return res.json(response);
     }
 
     // If selectedText exists and is non-empty, prioritize it
@@ -621,9 +663,55 @@ Provide a clear, accurate answer and include relevant quotes or references if po
     }
 
     const response = await callGemini(context, question);
+
+    // Save history if userId provided
+    if (userId && sessionId) {
+      const responseTime = Date.now() - startTime;
+      saveChatHistory({
+        userId,
+        sessionId,
+        requestType: "ask",
+        page,
+        input: {
+          question,
+          selectedText: page.selectedText,
+          mainTextPreview: page.mainText.substring(0, 500),
+        },
+        output: {
+          answer: response.answer,
+          citations: response.citations,
+        },
+        responseTime,
+      }).catch((err) => console.error("Failed to save history:", err));
+    }
+
     res.json(response);
   } catch (error) {
     console.error("Error in /ask:", error);
+
+    // Save failed attempt if userId provided
+    if (userId && sessionId && validated) {
+      const responseTime = Date.now() - startTime;
+      const page = (validated as any).page || req.body?.page;
+      const question = (validated as any).question || req.body?.question;
+
+      if (page) {
+        saveChatHistory({
+          userId,
+          sessionId,
+          requestType: "ask",
+          page,
+          input: {
+            question,
+            mainTextPreview: page.mainText?.substring(0, 500),
+          },
+          output: {},
+          responseTime,
+          success: false,
+        }).catch((err) => console.error("Failed to save failed history:", err));
+      }
+    }
+
     if (error instanceof z.ZodError) {
       res.status(400).json({ error: "Invalid request", details: error.errors });
     } else {
@@ -634,23 +722,52 @@ Provide a clear, accurate answer and include relevant quotes or references if po
 
 // Summarize endpoint (modular)
 app.post("/summarize", async (req, res) => {
+  const startTime = Date.now();
+  let userId: string | undefined;
+  let sessionId: mongoose.Types.ObjectId | undefined;
+
   try {
     const validated = SummarizeRequestSchema.parse(req.body);
-    const { page, detailLevel } = validated;
+    const { page, detailLevel, userId: requestUserId } = validated;
+    userId = requestUserId;
 
     console.log(
       `Summarizing ${page.contentType} document: "${page.title}" (detailLevel: ${detailLevel})`
     );
 
+    // Get or create session if userId provided
+    if (userId) {
+      sessionId = await getOrCreateSession(userId);
+    }
+
     const summary = await handleSummarize(page, detailLevel);
 
-    res.json({
+    const response = {
       summary,
       detailLevel,
       title: page.title,
       url: page.url,
       timestamp: new Date().toISOString(),
-    });
+    };
+
+    // Save history if userId provided
+    if (userId && sessionId) {
+      const responseTime = Date.now() - startTime;
+      saveChatHistory({
+        userId,
+        sessionId,
+        requestType: "summarize",
+        page,
+        input: {
+          detailLevel,
+          mainTextPreview: page.mainText.substring(0, 500),
+        },
+        output: { summary },
+        responseTime,
+      }).catch((err) => console.error("Failed to save history:", err));
+    }
+
+    res.json(response);
   } catch (error) {
     console.error("Error in /summarize:", error);
     if (error instanceof z.ZodError) {
@@ -666,22 +783,50 @@ app.post("/summarize", async (req, res) => {
 
 // Key Points endpoint
 app.post("/key-points", async (req, res) => {
+  const startTime = Date.now();
+  let userId: string | undefined;
+  let sessionId: mongoose.Types.ObjectId | undefined;
+
   try {
     const validated = KeyPointsRequestSchema.parse(req.body);
-    const { page } = validated;
+    const { page, userId: requestUserId } = validated;
+    userId = requestUserId;
 
     console.log(
       `Extracting key points from ${page.contentType} document: "${page.title}"`
     );
 
+    // Get or create session if userId provided
+    if (userId) {
+      sessionId = await getOrCreateSession(userId);
+    }
+
     const keyPoints = await handleKeyPoints(page);
 
-    res.json({
+    const response = {
       keyPoints,
       title: page.title,
       url: page.url,
       timestamp: new Date().toISOString(),
-    });
+    };
+
+    // Save history if userId provided
+    if (userId && sessionId) {
+      const responseTime = Date.now() - startTime;
+      saveChatHistory({
+        userId,
+        sessionId,
+        requestType: "key-points",
+        page,
+        input: {
+          mainTextPreview: page.mainText.substring(0, 500),
+        },
+        output: { keyPoints },
+        responseTime,
+      }).catch((err) => console.error("Failed to save history:", err));
+    }
+
+    res.json(response);
   } catch (error) {
     console.error("Error in /key-points:", error);
     if (error instanceof z.ZodError) {
@@ -697,22 +842,50 @@ app.post("/key-points", async (req, res) => {
 
 // Explain Like I'm 5 endpoint
 app.post("/explain-like-5", async (req, res) => {
+  const startTime = Date.now();
+  let userId: string | undefined;
+  let sessionId: mongoose.Types.ObjectId | undefined;
+
   try {
     const validated = ExplainLike5RequestSchema.parse(req.body);
-    const { page } = validated;
+    const { page, userId: requestUserId } = validated;
+    userId = requestUserId;
 
     console.log(
       `Explaining ${page.contentType} document: "${page.title}" (like I'm 5)`
     );
 
+    // Get or create session if userId provided
+    if (userId) {
+      sessionId = await getOrCreateSession(userId);
+    }
+
     const explanation = await handleExplainLike5(page);
 
-    res.json({
+    const response = {
       explanation,
       title: page.title,
       url: page.url,
       timestamp: new Date().toISOString(),
-    });
+    };
+
+    // Save history if userId provided
+    if (userId && sessionId) {
+      const responseTime = Date.now() - startTime;
+      saveChatHistory({
+        userId,
+        sessionId,
+        requestType: "explain-like-5",
+        page,
+        input: {
+          mainTextPreview: page.mainText.substring(0, 500),
+        },
+        output: { explanation },
+        responseTime,
+      }).catch((err) => console.error("Failed to save history:", err));
+    }
+
+    res.json(response);
   } catch (error) {
     console.error("Error in /explain-like-5:", error);
     if (error instanceof z.ZodError) {
@@ -728,22 +901,50 @@ app.post("/explain-like-5", async (req, res) => {
 
 // Action Items endpoint
 app.post("/action-items", async (req, res) => {
+  const startTime = Date.now();
+  let userId: string | undefined;
+  let sessionId: mongoose.Types.ObjectId | undefined;
+
   try {
     const validated = ActionItemsRequestSchema.parse(req.body);
-    const { page } = validated;
+    const { page, userId: requestUserId } = validated;
+    userId = requestUserId;
 
     console.log(
       `Extracting action items from ${page.contentType} document: "${page.title}"`
     );
 
+    // Get or create session if userId provided
+    if (userId) {
+      sessionId = await getOrCreateSession(userId);
+    }
+
     const actionItems = await handleActionItems(page);
 
-    res.json({
+    const response = {
       actionItems,
       title: page.title,
       url: page.url,
       timestamp: new Date().toISOString(),
-    });
+    };
+
+    // Save history if userId provided
+    if (userId && sessionId) {
+      const responseTime = Date.now() - startTime;
+      saveChatHistory({
+        userId,
+        sessionId,
+        requestType: "action-items",
+        page,
+        input: {
+          mainTextPreview: page.mainText.substring(0, 500),
+        },
+        output: { actionItems },
+        responseTime,
+      }).catch((err) => console.error("Failed to save history:", err));
+    }
+
+    res.json(response);
   } catch (error) {
     console.error("Error in /action-items:", error);
     if (error instanceof z.ZodError) {
@@ -754,6 +955,340 @@ app.post("/action-items", async (req, res) => {
         message: (error as Error).message,
       });
     }
+  }
+});
+
+// ==================== HISTORY API ENDPOINTS ====================
+
+// Get all history for a user
+app.get("/api/history/:userId", async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { limit = 50, offset = 0, requestType, search } = req.query;
+
+    const query: any = { userId };
+
+    if (requestType) {
+      query.requestType = requestType;
+    }
+
+    if (search) {
+      query.$or = [
+        { pageTitle: { $regex: search, $options: "i" } },
+        { pageUrl: { $regex: search, $options: "i" } },
+        { "input.question": { $regex: search, $options: "i" } },
+        { "output.answer": { $regex: search, $options: "i" } },
+        { "output.summary": { $regex: search, $options: "i" } },
+      ];
+    }
+
+    const history = await ChatHistory.find(query)
+      .sort({ timestamp: -1 })
+      .limit(Number(limit))
+      .skip(Number(offset))
+      .lean();
+
+    const total = await ChatHistory.countDocuments(query);
+
+    res.json({
+      history,
+      total,
+      limit: Number(limit),
+      offset: Number(offset),
+    });
+  } catch (error) {
+    console.error("Error fetching history:", error);
+    res.status(500).json({
+      error: "Internal server error",
+      message: (error as Error).message,
+    });
+  }
+});
+
+// Get single history entry
+app.get("/api/history/:userId/:historyId", async (req, res) => {
+  try {
+    const { userId, historyId } = req.params;
+
+    const entry = await ChatHistory.findOne({
+      _id: historyId,
+      userId,
+    }).lean();
+
+    if (!entry) {
+      return res.status(404).json({ error: "History entry not found" });
+    }
+
+    res.json(entry);
+  } catch (error) {
+    console.error("Error fetching history entry:", error);
+    res.status(500).json({
+      error: "Internal server error",
+      message: (error as Error).message,
+    });
+  }
+});
+
+// Delete history entry
+app.delete("/api/history/:userId/:historyId", async (req, res) => {
+  try {
+    const { userId, historyId } = req.params;
+
+    const result = await ChatHistory.deleteOne({
+      _id: historyId,
+      userId,
+    });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ error: "History entry not found" });
+    }
+
+    res.json({ success: true, message: "History entry deleted" });
+  } catch (error) {
+    console.error("Error deleting history:", error);
+    res.status(500).json({
+      error: "Internal server error",
+      message: (error as Error).message,
+    });
+  }
+});
+
+// Get user stats
+app.get("/api/sessions/:userId", async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const session = await Session.findOne({ userId });
+    if (!session) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+
+    const totalInteractions = await ChatHistory.countDocuments({ userId });
+    const requestTypeStats = await ChatHistory.aggregate([
+      { $match: { userId } },
+      { $group: { _id: "$requestType", count: { $sum: 1 } } },
+    ]);
+
+    const stats = {
+      requestTypeBreakdown: requestTypeStats.reduce((acc, item) => {
+        acc[item._id] = item.count;
+        return acc;
+      }, {} as Record<string, number>),
+    };
+
+    res.json({
+      session: {
+        userId: session.userId,
+        email: session.email,
+        createdAt: session.createdAt,
+        lastActive: session.lastActive,
+      },
+      stats: {
+        totalInteractions,
+        ...stats,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching session:", error);
+    res.status(500).json({
+      error: "Internal server error",
+      message: (error as Error).message,
+    });
+  }
+});
+
+// Create or get session
+app.post("/api/sessions", async (req, res) => {
+  try {
+    const { userId, email } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ error: "userId is required" });
+    }
+
+    const sessionId = await getOrCreateSession(userId, email);
+    const session = await Session.findOne({ userId });
+
+    res.json({
+      sessionId: sessionId.toString(),
+      userId: session!.userId,
+      email: session!.email,
+      createdAt: session!.createdAt,
+      lastActive: session!.lastActive,
+    });
+  } catch (error) {
+    console.error("Error creating session:", error);
+    res.status(500).json({
+      error: "Internal server error",
+      message: (error as Error).message,
+    });
+  }
+});
+
+// ==================== HISTORY API ENDPOINTS ====================
+
+// Get all history for a user
+app.get("/api/history/:userId", async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { limit = 50, offset = 0, requestType, search } = req.query;
+
+    const query: any = { userId };
+
+    if (requestType) {
+      query.requestType = requestType;
+    }
+
+    if (search) {
+      query.$or = [
+        { pageTitle: { $regex: search, $options: "i" } },
+        { pageUrl: { $regex: search, $options: "i" } },
+        { "input.question": { $regex: search, $options: "i" } },
+        { "output.answer": { $regex: search, $options: "i" } },
+        { "output.summary": { $regex: search, $options: "i" } },
+      ];
+    }
+
+    const history = await ChatHistory.find(query)
+      .sort({ timestamp: -1 })
+      .limit(Number(limit))
+      .skip(Number(offset))
+      .lean();
+
+    const total = await ChatHistory.countDocuments(query);
+
+    res.json({
+      history,
+      total,
+      limit: Number(limit),
+      offset: Number(offset),
+    });
+  } catch (error) {
+    console.error("Error fetching history:", error);
+    res.status(500).json({
+      error: "Internal server error",
+      message: (error as Error).message,
+    });
+  }
+});
+
+// Get single history entry
+app.get("/api/history/:userId/:historyId", async (req, res) => {
+  try {
+    const { userId, historyId } = req.params;
+
+    const entry = await ChatHistory.findOne({
+      _id: historyId,
+      userId,
+    }).lean();
+
+    if (!entry) {
+      return res.status(404).json({ error: "History entry not found" });
+    }
+
+    res.json(entry);
+  } catch (error) {
+    console.error("Error fetching history entry:", error);
+    res.status(500).json({
+      error: "Internal server error",
+      message: (error as Error).message,
+    });
+  }
+});
+
+// Delete history entry
+app.delete("/api/history/:userId/:historyId", async (req, res) => {
+  try {
+    const { userId, historyId } = req.params;
+
+    const result = await ChatHistory.deleteOne({
+      _id: historyId,
+      userId,
+    });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ error: "History entry not found" });
+    }
+
+    res.json({ success: true, message: "History entry deleted" });
+  } catch (error) {
+    console.error("Error deleting history:", error);
+    res.status(500).json({
+      error: "Internal server error",
+      message: (error as Error).message,
+    });
+  }
+});
+
+// Get user stats
+app.get("/api/sessions/:userId", async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const session = await Session.findOne({ userId });
+    if (!session) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+
+    const totalInteractions = await ChatHistory.countDocuments({ userId });
+    const requestTypeStats = await ChatHistory.aggregate([
+      { $match: { userId } },
+      { $group: { _id: "$requestType", count: { $sum: 1 } } },
+    ]);
+
+    const stats = {
+      requestTypeBreakdown: requestTypeStats.reduce((acc, item) => {
+        acc[item._id] = item.count;
+        return acc;
+      }, {} as Record<string, number>),
+    };
+
+    res.json({
+      session: {
+        userId: session.userId,
+        email: session.email,
+        createdAt: session.createdAt,
+        lastActive: session.lastActive,
+      },
+      stats: {
+        totalInteractions,
+        ...stats,
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching session:", error);
+    res.status(500).json({
+      error: "Internal server error",
+      message: (error as Error).message,
+    });
+  }
+});
+
+// Create or get session
+app.post("/api/sessions", async (req, res) => {
+  try {
+    const { userId, email } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ error: "userId is required" });
+    }
+
+    const sessionId = await getOrCreateSession(userId, email);
+    const session = await Session.findOne({ userId });
+
+    res.json({
+      sessionId: sessionId.toString(),
+      userId: session!.userId,
+      email: session!.email,
+      createdAt: session!.createdAt,
+      lastActive: session!.lastActive,
+    });
+  } catch (error) {
+    console.error("Error creating session:", error);
+    res.status(500).json({
+      error: "Internal server error",
+      message: (error as Error).message,
+    });
   }
 });
 
@@ -918,15 +1453,22 @@ app.get("/", (req, res) => {
     message: "ContextCopilot API Server",
     endpoints: {
       "GET /health": "Health check endpoint",
-      "POST /ask": "Ask questions about page content",
-      "POST /summarize": "Summarize page content (brief or detailed)",
-      "POST /key-points": "Extract key takeaways as bullet points",
-      "POST /explain-like-5": "Explain content in simple terms with analogies",
-      "POST /action-items": "Extract actionable items and tasks",
+      "POST /ask": "Ask questions about page content (add userId in body)",
+      "POST /summarize": "Summarize page content (add userId in body)",
+      "POST /key-points": "Extract key takeaways (add userId in body)",
+      "POST /explain-like-5":
+        "Explain content in simple terms (add userId in body)",
+      "POST /action-items": "Extract actionable items (add userId in body)",
       "POST /export-pdf": "Generate PDF from summary text",
       "POST /summarize-and-export": "Summarize and export to PDF in one call",
-      "POST /preview":
-        "Test endpoint for backend preview (use action: 'summarize' or 'ask')",
+      "POST /preview": "Test endpoint for backend preview",
+      "GET /api/history/:userId":
+        "Get chat history for a user (query: limit, offset, requestType, search)",
+      "GET /api/history/:userId/:historyId": "Get single history entry",
+      "DELETE /api/history/:userId/:historyId": "Delete history entry",
+      "GET /api/sessions/:userId": "Get user session and stats",
+      "POST /api/sessions":
+        "Create or get user session (body: { userId, email? })",
     },
   });
 });
@@ -935,30 +1477,44 @@ app.get("/health", (req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
-app.listen(PORT, () => {
-  console.log(`ContextCopilot server running on http://localhost:${PORT}`);
-  console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
+// Connect to MongoDB and start server
+async function startServer() {
+  try {
+    // Connect to MongoDB
+    await connectDB();
 
-  if (!process.env.GEMINI_API_KEY) {
-    console.error("\n❌ ERROR: GEMINI_API_KEY is missing!");
-    console.error("   I looked for the .env file in these locations:");
-    possiblePaths.forEach((p) => {
-      const exists = fs.existsSync(p);
-      console.error(`   - ${p} [${exists ? "FOUND" : "NOT FOUND"}]`);
+    // Start Express server
+    app.listen(PORT, () => {
+      console.log(`ContextCopilot server running on http://localhost:${PORT}`);
+      console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
+
+      if (!process.env.GEMINI_API_KEY) {
+        console.error("\n❌ ERROR: GEMINI_API_KEY is missing!");
+        console.error("   I looked for the .env file in these locations:");
+        possiblePaths.forEach((p) => {
+          const exists = fs.existsSync(p);
+          console.error(`   - ${p} [${exists ? "FOUND" : "NOT FOUND"}]`);
+        });
+        console.error("\n   TROUBLESHOOTING:");
+        console.error(
+          "   1. If it says [FOUND], check if GEMINI_API_KEY is spelled correctly inside."
+        );
+        console.error(
+          "   2. If all say [NOT FOUND], ensure the file is named exactly '.env' (not .env.txt)."
+        );
+      } else {
+        console.log(
+          `✓ GEMINI_API_KEY is set (loaded from ${
+            loadedEnvPath || "process environment"
+          })`
+        );
+        console.log("\n🚀 Server is ready and waiting for requests...");
+      }
     });
-    console.error("\n   TROUBLESHOOTING:");
-    console.error(
-      "   1. If it says [FOUND], check if GEMINI_API_KEY is spelled correctly inside."
-    );
-    console.error(
-      "   2. If all say [NOT FOUND], ensure the file is named exactly '.env' (not .env.txt)."
-    );
-  } else {
-    console.log(
-      `✓ GEMINI_API_KEY is set (loaded from ${
-        loadedEnvPath || "process environment"
-      })`
-    );
-    console.log("\n🚀 Server is ready and waiting for requests...");
+  } catch (error) {
+    console.error("Failed to start server:", error);
+    process.exit(1);
   }
-});
+}
+
+startServer();

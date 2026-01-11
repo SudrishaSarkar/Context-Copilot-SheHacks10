@@ -35,6 +35,7 @@ export const PagePayloadSchema = z.object({
 export const SummarizeRequestSchema = z.object({
   page: PagePayloadSchema,
   detailLevel: z.enum(["brief", "detailed"]).default("brief"),
+  userId: z.string().optional(), // Optional for backward compatibility
 });
 
 /**
@@ -42,6 +43,7 @@ export const SummarizeRequestSchema = z.object({
  */
 export const KeyPointsRequestSchema = z.object({
   page: PagePayloadSchema,
+  userId: z.string().optional(),
 });
 
 /**
@@ -49,6 +51,7 @@ export const KeyPointsRequestSchema = z.object({
  */
 export const ExplainLike5RequestSchema = z.object({
   page: PagePayloadSchema,
+  userId: z.string().optional(),
 });
 
 /**
@@ -56,4 +59,5 @@ export const ExplainLike5RequestSchema = z.object({
  */
 export const ActionItemsRequestSchema = z.object({
   page: PagePayloadSchema,
+  userId: z.string().optional(),
 });
