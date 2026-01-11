@@ -354,8 +354,9 @@ async function callGemini(
 
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
+    // Try gemini-pro (most stable), fallback to gemini-1.5-pro if needed
     const model = genAI.getGenerativeModel({
-      model: "gemini-1.5-flash",
+      model: "gemini-pro",
       generationConfig: {
         temperature: 0.2,
       },
