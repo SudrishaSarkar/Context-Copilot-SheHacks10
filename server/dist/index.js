@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors";
-import dotenv from "dotenv";
+import { config } from "dotenv";
 import { z } from "zod";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import PDFDocument from "pdfkit";
@@ -9,6 +9,7 @@ import path from "path";
 import os from "os";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
+import multer from "multer";
 // Ensure .env is loaded from the correct directory (try multiple paths)
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -20,7 +21,7 @@ const possiblePaths = [
 let loadedEnvPath = null;
 for (const p of possiblePaths) {
     if (fs.existsSync(p)) {
-        dotenv.config({ path: p });
+        config({ path: p });
         if (process.env.GEMINI_API_KEY) {
             loadedEnvPath = p;
             break;
@@ -30,10 +31,18 @@ for (const p of possiblePaths) {
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "50mb" })); // Increase limit for base64 images
+// Configure Multer for memory storage (handling audio uploads)
+const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 25 * 1024 * 1024 }, // 25MB limit
+});
+// DEBUG: Log every incoming request
+app.use((req, res, next) => {
+    console.log(`\n📨 [${new Date().toLocaleTimeString()}] ${req.method} ${req.url}`);
+    next();
+});
 const PORT = 8787;
-// Gemini model name - can be overridden with GEMINI_MODEL env var
-// Current recommended model: gemini-2.5-flash
-const GEMINI_MODEL = process.env.GEMINI_MODEL ?? "gemini-2.5-flash";
+let currentModelName = process.env.GEMINI_MODEL || "gemini-1.5-flash";
 const AskRequestSchema = z.object({
     question: z.string(),
     page: z.object({
@@ -84,7 +93,7 @@ const SummarizeRequestSchema = z.object({
             .optional(),
         imageBase64: z.string().optional(),
     }),
-    format: z.enum(["summary", "bullet", "extract"]).default("summary"),
+    format: z.enum(["summary", "bullet", "extract", "eli5"]).default("summary"),
 });
 function chunkText(text, chunkSize = 1800) {
     const chunks = [];
@@ -113,10 +122,7 @@ function selectTopChunks(mainText, question, topN = 6) {
         idx,
     }));
     scored.sort((a, b) => b.score - a.score);
-    return scored
-        .slice(0, topN)
-        .map((s) => s.chunk)
-        .join("\n\n---\n\n");
+    return scored.slice(0, topN).map((s) => s.chunk).join("\n\n---\n\n");
 }
 async function callGemini(context, question) {
     const apiKey = process.env.GEMINI_API_KEY;
@@ -124,7 +130,8 @@ async function callGemini(context, question) {
         throw new Error("GEMINI_API_KEY not set in environment");
     }
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
+    console.log(`   - Using Gemini Model: ${currentModelName}`);
+    const model = genAI.getGenerativeModel({ model: currentModelName });
     const prompt = `You are a helpful assistant that answers questions based ONLY on the provided text below.
 
 PROVIDED TEXT:
@@ -157,10 +164,7 @@ Return ONLY the JSON object, no markdown formatting, no explanation, just the ra
         // Try to extract JSON from the response
         let jsonText = text.trim();
         // Remove markdown code blocks if present
-        jsonText = jsonText
-            .replace(/```json\n?/g, "")
-            .replace(/```\n?/g, "")
-            .trim();
+        jsonText = jsonText.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
         const parsed = JSON.parse(jsonText);
         // Validate structure
         if (!parsed.answer || !Array.isArray(parsed.citations)) {
@@ -200,7 +204,9 @@ async function callGeminiVision(imageBase64, prompt) {
         throw new Error("GEMINI_API_KEY not set in environment");
     }
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
+    // Force use of 1.5 Flash for vision as it is multimodal and fast
+    const visionModelName = "gemini-1.5-flash";
+    const model = genAI.getGenerativeModel({ model: visionModelName });
     // Convert base64 to buffer
     const imageBuffer = Buffer.from(imageBase64, "base64");
     // Determine MIME type from base64 prefix
@@ -224,35 +230,69 @@ async function callGeminiVision(imageBase64, prompt) {
         throw error;
     }
 }
+// ElevenLabs Speech-to-Text Integration
+async function transcribeWithElevenLabs(audioBuffer, mimeType) {
+    const apiKey = process.env.ELEVENLABS_API_KEY;
+    if (!apiKey) {
+        throw new Error("ELEVENLABS_API_KEY not set in environment");
+    }
+    const apiUrl = "https://api.elevenlabs.io/v1/speech-to-text";
+    const formData = new FormData();
+    const blob = new Blob([audioBuffer], { type: mimeType });
+    // Determine extension based on mimeType
+    let ext = "wav";
+    if (mimeType.includes("webm"))
+        ext = "webm";
+    else if (mimeType.includes("mp4"))
+        ext = "mp4";
+    else if (mimeType.includes("mpeg") || mimeType.includes("mp3"))
+        ext = "mp3";
+    else if (mimeType.includes("m4a"))
+        ext = "m4a";
+    formData.append("file", blob, `audio.${ext}`);
+    formData.append("model_id", "scribe_v1");
+    const response = await fetch(apiUrl, {
+        method: "POST",
+        headers: {
+            "xi-api-key": apiKey,
+        },
+        body: formData,
+    });
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`ElevenLabs STT API Error: ${response.status} ${response.statusText} - ${errorText}`);
+    }
+    const data = await response.json();
+    return data.text;
+}
 // System prompt for summarization/extraction
 function getSummarizePrompt(contentType, format) {
     const formatInstructions = {
-        summary: `Create a comprehensive summary of the document. Focus on:
-- Main topics and themes
-- Key findings or conclusions
-- Important dates, numbers, or figures
-- Critical details that should be remembered
-- Overall purpose or context`,
-        bullet: `Extract the most important information as bullet points. Include:
-- Main points (use • for main bullets)
-- Sub-points (use - for sub-bullets)
-- Key terms, dates, names, figures
-- Action items or important notices
-- Terms and conditions highlights (if applicable)`,
-        extract: `Extract and organize the most critical information. Structure it as:
-- Executive Summary (2-3 sentences)
-- Key Points (numbered list)
-- Important Details (organized by category)
-- Action Items or Requirements (if any)
-- Dates, Deadlines, or Timeframes (if any)`,
+        summary: `Provide a crisp, structured summary of the content.
+- **Executive Summary**: A 2-3 sentence overview of the main purpose.
+- **Key Takeaways**: The most important points.
+- **Details**: Specifics on dates, figures, requirements, or findings.
+- **Conclusion**: The final outcome or action items.
+Do not use generic filler phrases. Be direct.`,
+        bullet: `List the key information in a clean bulleted format.
+- Use main bullets for major topics.
+- Use sub-bullets for supporting details.
+- Bold **key terms**, **dates**, and **figures**.
+- Ignore navigation menus, footers, and irrelevant web clutter.`,
+        extract: `Extract specific entities and data points.
+- **Dates & Deadlines**: List all relevant dates.
+- **Financials**: Costs, prices, fees (if any).
+- **Names/Entities**: People, companies, organizations mentioned.
+- **Action Items**: Things the reader needs to do.`,
+        eli5: `Explain this like I'm 5 years old.
+- Use simple words.
+- Use an analogy if helpful.
+- Keep it short and fun.
+- "Here is the gist: ..."`,
     };
     const basePrompt = `You are an expert document analysis assistant. Your task is to analyze the provided document and create a clear, concise output that makes complex information easy to understand.
 
-DOCUMENT TYPE: ${contentType === "pdf_image"
-        ? "Scanned/Image-based document"
-        : contentType === "pdf_text"
-            ? "Text-based PDF document"
-            : "Web page"}
+DOCUMENT TYPE: ${contentType === "pdf_image" ? "Scanned/Image-based document" : contentType === "pdf_text" ? "Text-based PDF document" : "Web page"}
 
 OUTPUT FORMAT: ${formatInstructions[format]}
 
@@ -276,8 +316,10 @@ OUTPUT REQUIREMENTS:
     return basePrompt;
 }
 async function summarizeWithGemini(page, format) {
+    console.log(`[summarizeWithGemini] Starting. Format: ${format}, ContentType: ${page.contentType}`);
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
+        console.error("[summarizeWithGemini] Error: GEMINI_API_KEY not set");
         throw new Error("GEMINI_API_KEY not set in environment");
     }
     const genAI = new GoogleGenerativeAI(apiKey);
@@ -285,6 +327,7 @@ async function summarizeWithGemini(page, format) {
     try {
         if (page.contentType === "pdf_image" && page.imageBase64) {
             // Use Vision API for image-based PDFs
+            console.log("[summarizeWithGemini] Processing as Image PDF (Vision)");
             const prompt = `${systemPrompt}
 
 Please analyze this document image and provide the requested output format.`;
@@ -292,15 +335,27 @@ Please analyze this document image and provide the requested output format.`;
         }
         else {
             // Use text API for text-based content
-            const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
+            console.log(`[summarizeWithGemini] Using model: ${currentModelName}`);
+            const model = genAI.getGenerativeModel({ model: currentModelName });
             // If selectedText exists, use it; otherwise use mainText (chunked if too long)
             let content = page.selectedText || page.mainText;
+            if (!content || content.trim().length === 0) {
+                console.warn("[summarizeWithGemini] Warning: Content is empty.");
+                return "The document appears to be empty or content could not be extracted. Please try selecting specific text.";
+            }
+            console.log(`[summarizeWithGemini] Content length: ${content.length} chars`);
+            // Determine chunking threshold based on model capabilities
+            // Gemini 1.5 has ~1M token window (~4M chars). We use a safe limit of 800k chars.
+            const isGemini15 = currentModelName.includes("1.5");
+            const chunkThreshold = isGemini15 ? 800000 : 30000;
             // If content is too long, summarize in chunks
-            if (content.length > 50000) {
+            if (content.length > chunkThreshold) {
+                console.log("[summarizeWithGemini] Content too long, using chunking strategy.");
                 // Split into chunks and summarize each, then combine
-                const chunks = chunkText(content, 40000);
+                const chunks = chunkText(content, isGemini15 ? 500000 : 40000);
                 const chunkSummaries = [];
                 for (const chunk of chunks) {
+                    console.log(`[summarizeWithGemini] Processing chunk ${chunkSummaries.length + 1}/${chunks.length}`);
                     const chunkPrompt = `${systemPrompt}
 
 DOCUMENT CONTENT:
@@ -328,11 +383,7 @@ DOCUMENT CONTENT:
 ${content}
 
 PROVIDED TEXT (if applicable):
-${page.structure
-                    ? `\nDocument Structure:\n${page.structure
-                        .map((s) => `- ${s.title}${s.page ? ` (Page ${s.page})` : ""}`)
-                        .join("\n")}`
-                    : ""}
+${page.structure ? `\nDocument Structure:\n${page.structure.map((s) => `- ${s.title}${s.page ? ` (Page ${s.page})` : ""}`).join("\n")}` : ""}
 
 Please analyze this content and provide the output in the requested format.`;
                 const result = await model.generateContent(prompt);
@@ -342,7 +393,7 @@ Please analyze this content and provide the output in the requested format.`;
         }
     }
     catch (error) {
-        console.error("Summarization error:", error);
+        console.error("[summarizeWithGemini] API Error:", error);
         throw error;
     }
 }
@@ -400,11 +451,7 @@ function generatePDF(summary, title, format) {
                             /^[A-Z][a-z]+([\s][A-Z][a-z]+)+$/.test(trimmed) ||
                             trimmed.startsWith("##") ||
                             trimmed.startsWith("#"))) {
-                        doc
-                            .moveDown(0.5)
-                            .fontSize(14)
-                            .font("Helvetica-Bold")
-                            .text(trimmed, {
+                        doc.moveDown(0.5).fontSize(14).font("Helvetica-Bold").text(trimmed, {
                             continued: false,
                         });
                         doc.fontSize(12).font("Helvetica").moveDown(0.3);
@@ -444,11 +491,13 @@ function savePDFToDownloads(pdfBuffer, filename) {
 // Existing /ask endpoint
 app.post("/ask", async (req, res) => {
     try {
+        console.log("🔍 Processing /ask request...");
         const validated = AskRequestSchema.parse(req.body);
         const { question, page } = validated;
         let context;
         // Handle image-based PDFs with Vision API
         if (page.contentType === "pdf_image" && page.imageBase64) {
+            console.log("   - Processing as Image PDF (Vision API)");
             const visionPrompt = `Based on this document image, answer the following question: ${question}
 
 Provide a clear, accurate answer and include relevant quotes or references if possible.`;
@@ -460,17 +509,21 @@ Provide a clear, accurate answer and include relevant quotes or references if po
         }
         // If selectedText exists and is non-empty, prioritize it
         if (page.selectedText && page.selectedText.trim().length > 0) {
+            console.log("   - Using user selected text");
             context = page.selectedText;
         }
         else {
             // Chunk and select top chunks
+            console.log("   - Using full page content (chunking)");
             context = selectTopChunks(page.mainText, question, 6);
         }
         // Limit context size to avoid token limits
         if (context.length > 80000) {
             context = context.substring(0, 80000);
         }
+        console.log("   - Calling Gemini API...");
         const response = await callGemini(context, question);
+        console.log("✅ Gemini responded successfully");
         res.json(response);
     }
     catch (error) {
@@ -483,13 +536,35 @@ Provide a clear, accurate answer and include relevant quotes or references if po
         }
     }
 });
+// Transcribe Endpoint (Voice Ask)
+app.post("/transcribe", upload.single("audio"), async (req, res) => {
+    try {
+        console.log("🎙️ Processing /transcribe request...");
+        // Cast req to any to access file property added by multer
+        const file = req.file;
+        if (!file) {
+            return res.status(400).json({ error: "No audio file provided" });
+        }
+        console.log(`   - Received audio: ${file.size} bytes, type: ${file.mimetype}`);
+        console.log("   - Calling ElevenLabs Speech-to-Text...");
+        const transcript = await transcribeWithElevenLabs(file.buffer, file.mimetype);
+        console.log("✅ Transcription successful");
+        res.json({ transcript });
+    }
+    catch (error) {
+        console.error("Error in /transcribe:", error);
+        res.status(500).json({ error: "Transcription failed", details: error.message });
+    }
+});
 // New /summarize endpoint
 app.post("/summarize", async (req, res) => {
     try {
+        console.log("\n📨 POST /summarize received");
         const validated = SummarizeRequestSchema.parse(req.body);
         const { page, format } = validated;
-        console.log(`Summarizing ${page.contentType} document: "${page.title}" (format: ${format})`);
+        console.log(`[Endpoint] Summarizing ${page.contentType} document: "${page.title}" (format: ${format})`);
         const summary = await summarizeWithGemini(page, format);
+        console.log("[Endpoint] Summary generated successfully. Length:", summary.length);
         res.json({
             summary,
             format,
@@ -499,15 +574,12 @@ app.post("/summarize", async (req, res) => {
         });
     }
     catch (error) {
-        console.error("Error in /summarize:", error);
+        console.error("[Endpoint] Error in /summarize:", error);
         if (error instanceof z.ZodError) {
             res.status(400).json({ error: "Invalid request", details: error.errors });
         }
         else {
-            res.status(500).json({
-                error: "Internal server error",
-                message: error.message,
-            });
+            res.status(500).json({ error: "Internal server error", message: error.message });
         }
     }
 });
@@ -582,10 +654,7 @@ app.post("/summarize-and-export", async (req, res) => {
             res.status(400).json({ error: "Invalid request", details: error.errors });
         }
         else {
-            res.status(500).json({
-                error: "Internal server error",
-                message: error.message,
-            });
+            res.status(500).json({ error: "Internal server error", message: error.message });
         }
     }
 });
@@ -640,10 +709,7 @@ app.post("/preview", async (req, res) => {
             res.status(400).json({ error: "Invalid request", details: error.errors });
         }
         else {
-            res.status(500).json({
-                error: "Internal server error",
-                message: error.message,
-            });
+            res.status(500).json({ error: "Internal server error", message: error.message });
         }
     }
 });
@@ -653,6 +719,7 @@ app.get("/", (req, res) => {
         endpoints: {
             "GET /health": "Health check endpoint",
             "POST /ask": "Ask questions about page content",
+            "GET /list-models": "List available Gemini models",
             "POST /summarize": "Summarize/extract/bullet point page content",
             "POST /export-pdf": "Generate PDF from summary text",
             "POST /summarize-and-export": "Summarize and export to PDF in one call",
@@ -663,13 +730,67 @@ app.get("/", (req, res) => {
 app.get("/health", (req, res) => {
     res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
-app.listen(PORT, () => {
+// Helper route to list available models
+app.get("/list-models", async (req, res) => {
+    try {
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (!apiKey)
+            return res.status(500).json({ error: "GEMINI_API_KEY not set" });
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+        const data = await response.json();
+        res.json(data);
+    }
+    catch (error) {
+        res.status(500).json({ error: "Failed to list models", details: String(error) });
+    }
+});
+async function checkModelAvailability() {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey)
+        return;
+    try {
+        console.log("🔍 Checking model availability...");
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+        if (!response.ok) {
+            console.warn(`⚠️ Failed to fetch models list: ${response.statusText}`);
+            return;
+        }
+        const data = await response.json();
+        const models = data.models?.map((m) => m.name.replace("models/", "")) || [];
+        if (models.length > 0) {
+            if (!models.includes(currentModelName)) {
+                console.warn(`⚠️ Configured model "${currentModelName}" not found in available models.`);
+                // Try to find a good fallback
+                const fallbacks = ["gemini-1.5-flash", "gemini-1.5-flash-001", "gemini-1.5-pro", "gemini-2.0-flash-exp"];
+                const fallback = fallbacks.find(f => models.includes(f));
+                if (fallback) {
+                    console.log(`   -> Switching to available model: ${fallback}`);
+                    currentModelName = fallback;
+                }
+                else {
+                    // Filter out embedding models which cannot generate text
+                    const generativeModels = models.filter((m) => !m.includes("embedding") && !m.includes("aqa"));
+                    const bestGuess = generativeModels.length > 0 ? generativeModels[0] : "gemini-1.5-flash";
+                    console.log(`   -> No preferred fallback found. Using: ${bestGuess}`);
+                    currentModelName = bestGuess;
+                }
+            }
+            else {
+                console.log(`✓ Model "${currentModelName}" is available.`);
+            }
+        }
+    }
+    catch (e) {
+        console.error("⚠️ Failed to check model availability:", e);
+    }
+}
+app.listen(PORT, "0.0.0.0", async () => {
     console.log(`ContextCopilot server running on http://localhost:${PORT}`);
     console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
     if (!process.env.GEMINI_API_KEY) {
         console.error("\n❌ ERROR: GEMINI_API_KEY is missing!");
         console.error("   I looked for the .env file in these locations:");
-        possiblePaths.forEach((p) => {
+        possiblePaths.forEach(p => {
             const exists = fs.existsSync(p);
             console.error(`   - ${p} [${exists ? "FOUND" : "NOT FOUND"}]`);
         });
@@ -679,6 +800,14 @@ app.listen(PORT, () => {
     }
     else {
         console.log(`✓ GEMINI_API_KEY is set (loaded from ${loadedEnvPath || "process environment"})`);
+        if (process.env.ELEVENLABS_API_KEY) {
+            console.log(`✓ ELEVENLABS_API_KEY is set`);
+        }
+        else {
+            console.warn(`⚠️ ELEVENLABS_API_KEY is missing! Voice transcription will fail.`);
+        }
+        await checkModelAvailability();
+        console.log(`✓ GEMINI_MODEL is set to: ${currentModelName}`);
         console.log("\n🚀 Server is ready and waiting for requests...");
     }
 });

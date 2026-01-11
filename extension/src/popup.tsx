@@ -1,8 +1,10 @@
 import React, { useState } from "react";
+import { VoiceMic } from "./VoiceMic";
 import type { PagePayload, AskResponse, ExtensionMessage } from "./types";
+import { LayoutDashboard } from "lucide-react";
 
-const API_URL = "http://localhost:8787/ask";
-const SUMMARIZE_API_URL = "http://localhost:8787/summarize";
+const API_URL = "http://127.0.0.1:8787/ask";
+const SUMMARIZE_API_URL = "http://127.0.0.1:8787/summarize";
 
 // Clean and format summary text - remove markdown symbols and format nicely
 function formatSummary(text: string): string {
@@ -191,22 +193,40 @@ export default function Popup() {
     }
   };
 
+  const openDashboard = () => {
+    chrome.tabs.create({ url: "dashboard.html" });
+  };
+
   return (
     <div className="popup-container">
       <div className="popup-header">
         <h1>ContextCopilot</h1>
+        <button 
+          onClick={openDashboard}
+          className="dashboard-icon-btn"
+          title="Open Dashboard"
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b', padding: '4px' }}
+        >
+          <LayoutDashboard size={20} />
+        </button>
       </div>
 
       <div className="popup-content">
         <div className="question-section">
-          <textarea
-            className="question-input"
-            placeholder="Ask a question about this page..."
-            value={question}
-            onChange={(e) => setQuestion(e.target.value)}
-            rows={3}
-            disabled={loading || summaryLoading}
-          />
+          <div style={{ position: "relative" }}>
+            <textarea
+              className="question-input"
+              placeholder="Ask a question about this page..."
+              value={question}
+              onChange={(e) => setQuestion(e.target.value)}
+              rows={3}
+              disabled={loading || summaryLoading}
+              style={{ paddingRight: "40px" }}
+            />
+            <div style={{ position: "absolute", bottom: "8px", right: "8px", zIndex: 10 }}>
+              <VoiceMic onTranscript={(text) => setQuestion(text)} />
+            </div>
+          </div>
           <div className="button-group">
             <button
               className="ask-button"

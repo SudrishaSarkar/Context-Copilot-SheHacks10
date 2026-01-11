@@ -30,4 +30,7 @@ export interface AskResponse {
     answer: string;
     citations: Citation[];
 }
+export interface TranscribeResponse {
+    transcript: string;
+}
 //# sourceMappingURL=types.d.ts.map
