@@ -67,6 +67,13 @@ export default defineConfig({
           }
           return "assets/[name][extname]";
         },
+        // Build as IIFE format - required for Chrome extension content scripts
+        // Popup will also work with IIFE in extension context
+        format: "iife",
+        name: "ContextCopilot",
+        // CRITICAL: Inline all dynamic imports to avoid chunk files with import statements
+        // This ensures contentScript.js is a single self-contained IIFE bundle
+        inlineDynamicImports: true,
       },
     },
   },

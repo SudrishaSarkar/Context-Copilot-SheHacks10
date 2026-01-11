@@ -6,6 +6,9 @@ import { getUserId } from "./utils/userId";
 
 const API_URL = "http://localhost:8787/ask";
 const SUMMARIZE_API_URL = "http://localhost:8787/summarize";
+const KEY_POINTS_API_URL = "http://localhost:8787/key-points";
+const EXPLAIN_LIKE_5_API_URL = "http://localhost:8787/explain-like-5";
+const ACTION_ITEMS_API_URL = "http://localhost:8787/action-items";
 const EMAIL_ANALYZE_URL = "http://localhost:8787/email/analyze";
 const HISTORY_URL = "http://localhost:8787/history";
 // Dashboard URL - update this to your dashboard website URL
@@ -108,7 +111,7 @@ function formatSummary(text: string): string {
   
   let cleaned = text;
   
-  // Remove markdown headers (###, ##, #)
+  // Remove markdown headers (###, ##, #) but preserve section headers like "SUMMARY:"
   cleaned = cleaned.replace(/^#{1,6}\s+/gm, "");
   
   // Remove markdown bold/italic markers but keep the text
@@ -116,6 +119,14 @@ function formatSummary(text: string): string {
   cleaned = cleaned.replace(/\*([^*]+)\*/g, "$1");
   cleaned = cleaned.replace(/__([^_]+)__/g, "$1");
   cleaned = cleaned.replace(/_([^_]+)_/g, "$1");
+  
+  // Remove any standalone asterisks that aren't part of bullets (more aggressive)
+  // First, protect bullet points by temporarily replacing them
+  cleaned = cleaned.replace(/^•\s/gm, "BULLET_MARKER ");
+  // Remove all remaining asterisks
+  cleaned = cleaned.replace(/\*/g, "");
+  // Restore bullet points
+  cleaned = cleaned.replace(/BULLET_MARKER /g, "• ");
   
   // Remove markdown code blocks
   cleaned = cleaned.replace(/```[\s\S]*?```/g, "");
@@ -130,22 +141,33 @@ function formatSummary(text: string): string {
   // Convert numbered lists to clean format
   cleaned = cleaned.replace(/^\d+[\.\)]\s+/gm, "");
   
-  // Remove extra symbols and formatting
-  cleaned = cleaned.replace(/[●○▪▫]/g, "•"); // Normalize bullet types
-  cleaned = cleaned.replace(/[—–]/g, "-"); // Normalize dashes
+  // Normalize bullet types
+  cleaned = cleaned.replace(/[●○▪▫]/g, "•");
+  cleaned = cleaned.replace(/[—–]/g, "-");
   
   // Clean up multiple spaces
   cleaned = cleaned.replace(/  +/g, " ");
   
-  // Clean up multiple newlines (max 2 consecutive)
-  cleaned = cleaned.replace(/\n{3,}/g, "\n\n");
+  // Preserve structured format - ensure section headers are on their own line
+  cleaned = cleaned.replace(/(SUMMARY:|KEY DETAILS:|CONTEXT:|EXPLANATION:|ANALOGY:)/g, "\n$1");
   
-  // Remove leading/trailing symbols from lines
+  // Clean up multiple newlines (max 2 consecutive, but preserve structure)
+  cleaned = cleaned.replace(/\n{4,}/g, "\n\n\n");
+  
+  // Remove leading/trailing symbols from lines (but preserve section headers and bullets)
   cleaned = cleaned
     .split("\n")
     .map((line) => {
       let trimmed = line.trim();
-      // Remove leading symbols that aren't bullets
+      // Preserve section headers
+      if (trimmed.match(/^(SUMMARY|KEY DETAILS|CONTEXT|EXPLANATION|ANALOGY):/i)) {
+        return trimmed;
+      }
+      // Preserve bullet points
+      if (trimmed.startsWith("•")) {
+        return trimmed;
+      }
+      // Remove leading symbols that aren't part of structure
       trimmed = trimmed.replace(/^[^\w•\-]+/, "");
       return trimmed;
     })
@@ -155,6 +177,12 @@ function formatSummary(text: string): string {
   // Final cleanup - remove any remaining markdown artifacts
   cleaned = cleaned.replace(/\[|\]/g, ""); // Remove square brackets
   cleaned = cleaned.replace(/\(\)/g, ""); // Remove empty parentheses
+  
+  // Final pass: remove any remaining asterisks (shouldn't be any, but just in case)
+  cleaned = cleaned.replace(/\*/g, "");
+  
+  // Ensure proper spacing around section headers
+  cleaned = cleaned.replace(/\n(SUMMARY:|KEY DETAILS:|CONTEXT:|EXPLANATION:|ANALOGY:)/g, "\n\n$1");
   
   return cleaned.trim();
 }
@@ -228,6 +256,46 @@ export default function Popup() {
     setAskError(null); // Clear any previous errors
   };
 
+  // Helper function to safely get page payload with retry logic
+  const getPagePayloadSafe = async (tabId: number, tabUrl?: string, tabTitle?: string): Promise<PagePayload> => {
+    // Check if it's a restricted page where content scripts can't run
+    if (tabUrl && (tabUrl.startsWith("chrome://") || tabUrl.startsWith("chrome-extension://") || tabUrl.startsWith("edge://") || tabUrl.startsWith("about:"))) {
+      throw new Error("Cannot access content on this page. Please navigate to a regular webpage.");
+    }
+
+    // Try to send message to content script (it should be loaded via manifest)
+    // Retry a few times in case the script is still loading
+    let lastError: Error | null = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const pagePayload = await chrome.tabs.sendMessage<ExtensionMessage, PagePayload>(
+          tabId,
+          { type: "GET_PAGE_PAYLOAD" }
+        );
+        if (pagePayload) {
+          return pagePayload;
+        }
+      } catch (err) {
+        lastError = err as Error;
+        // Wait a bit before retrying (content script might still be loading)
+        if (attempt < 2) {
+          await new Promise(resolve => setTimeout(resolve, 300));
+        }
+      }
+    }
+
+    // If all retries failed, create a basic payload from tab info
+    // This allows the extension to work even if content script isn't available
+    console.warn("Content script not available, using fallback payload:", lastError?.message);
+    return {
+      url: tabUrl || "",
+      title: tabTitle || "",
+      contentType: "html",
+      mainText: "", // Can't get page content without content script
+      meta: { timestamp: Date.now() },
+    };
+  };
+
   const handleAsk = async (promptOverride?: string) => {
     const promptText = promptOverride || question.trim();
     
@@ -254,15 +322,8 @@ export default function Popup() {
         throw new Error("No active tab found");
       }
 
-      // Send message to content script to get page payload
-      const pagePayload = await chrome.tabs.sendMessage<ExtensionMessage, PagePayload>(
-        tab.id,
-        { type: "GET_PAGE_PAYLOAD" }
-      );
-
-      if (!pagePayload) {
-        throw new Error("Failed to get page content");
-      }
+      // Get page payload with safe fallback
+      const pagePayload = await getPagePayloadSafe(tab.id, tab.url, tab.title);
 
       // Send request to backend
       const response = await fetch(API_URL, {
@@ -320,15 +381,8 @@ export default function Popup() {
         return;
       }
 
-      // Send message to content script to get page payload
-      const pagePayload = await chrome.tabs.sendMessage<ExtensionMessage, PagePayload>(
-        tab.id,
-        { type: "GET_PAGE_PAYLOAD" }
-      );
-
-      if (!pagePayload) {
-        throw new Error("Failed to get page content");
-      }
+      // Get page payload with safe fallback
+      const pagePayload = await getPagePayloadSafe(tab.id, tab.url, tab.title);
 
       // Check if we have transcript text
       const hasTranscript = pagePayload.mainText && 
@@ -390,15 +444,8 @@ export default function Popup() {
         throw new Error("No active tab found");
       }
 
-      // Send message to content script to get page payload
-      const pagePayload = await chrome.tabs.sendMessage<ExtensionMessage, PagePayload>(
-        tab.id,
-        { type: "GET_PAGE_PAYLOAD" }
-      );
-
-      if (!pagePayload) {
-        throw new Error("Failed to get page content");
-      }
+      // Get page payload with safe fallback
+      const pagePayload = await getPagePayloadSafe(tab.id, tab.url, tab.title);
 
       // Check if payload looks like an email (has subject/body or selected text)
       const emailText = pagePayload.selectedText || pagePayload.mainText || "";
@@ -457,15 +504,8 @@ export default function Popup() {
         throw new Error("No active tab found");
       }
 
-      // Send message to content script to get page payload
-      const pagePayload = await chrome.tabs.sendMessage<ExtensionMessage, PagePayload>(
-        tab.id,
-        { type: "GET_PAGE_PAYLOAD" }
-      );
-
-      if (!pagePayload) {
-        throw new Error("Failed to get page content");
-      }
+      // Get page payload with safe fallback
+      const pagePayload = await getPagePayloadSafe(tab.id, tab.url, tab.title);
 
       // Send request to backend
       const response = await fetch(SUMMARIZE_API_URL, {
@@ -492,6 +532,126 @@ export default function Popup() {
       console.error("Error:", err);
       // Note: Summary errors are from Quick Actions, so we don't set askError
       // Quick Actions tab doesn't show errors
+    } finally {
+      setSummaryLoading(false);
+    }
+  };
+
+  const handleKeyPoints = async () => {
+    setSummaryLoading(true);
+    setAskError(null);
+    setSummary(null);
+    setAnswer(null);
+    setCitations([]);
+
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab.id) {
+        throw new Error("No active tab found");
+      }
+
+      const pagePayload = await getPagePayloadSafe(tab.id, tab.url, tab.title);
+
+      const response = await fetch(KEY_POINTS_API_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          page: pagePayload,
+          userId: userId || undefined,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Server error: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      const formattedKeyPoints = formatSummary(data.keyPoints);
+      setSummary(formattedKeyPoints);
+    } catch (err) {
+      console.error("Error:", err);
+    } finally {
+      setSummaryLoading(false);
+    }
+  };
+
+  const handleExplainLike5 = async () => {
+    setSummaryLoading(true);
+    setAskError(null);
+    setSummary(null);
+    setAnswer(null);
+    setCitations([]);
+
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab.id) {
+        throw new Error("No active tab found");
+      }
+
+      const pagePayload = await getPagePayloadSafe(tab.id, tab.url, tab.title);
+
+      const response = await fetch(EXPLAIN_LIKE_5_API_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          page: pagePayload,
+          userId: userId || undefined,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Server error: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      const formattedExplanation = formatSummary(data.explanation);
+      setSummary(formattedExplanation);
+    } catch (err) {
+      console.error("Error:", err);
+    } finally {
+      setSummaryLoading(false);
+    }
+  };
+
+  const handleActionItems = async () => {
+    setSummaryLoading(true);
+    setAskError(null);
+    setSummary(null);
+    setAnswer(null);
+    setCitations([]);
+
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab.id) {
+        throw new Error("No active tab found");
+      }
+
+      const pagePayload = await getPagePayloadSafe(tab.id, tab.url, tab.title);
+
+      const response = await fetch(ACTION_ITEMS_API_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          page: pagePayload,
+          userId: userId || undefined,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Server error: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      const formattedActionItems = formatSummary(data.actionItems);
+      setSummary(formattedActionItems);
+    } catch (err) {
+      console.error("Error:", err);
     } finally {
       setSummaryLoading(false);
     }
@@ -873,6 +1033,7 @@ export default function Popup() {
               className="ask-ai-button"
               onClick={handleAsk}
               disabled={loading || summaryLoading || !question.trim()}
+              style={{ display: "block" }}
             >
               {loading ? (
                 <>
@@ -907,7 +1068,7 @@ export default function Popup() {
               </button>
               <button
                 className="quick-action-card"
-                onClick={() => handleAsk("Summarize this page")}
+                onClick={handleSummarize}
                 disabled={loading || summaryLoading}
               >
                 <div className="quick-action-icon summarize-icon">
@@ -920,7 +1081,7 @@ export default function Popup() {
               </button>
               <button
                 className="quick-action-card"
-                onClick={() => handleAsk("What are the key takeaways and main points?")}
+                onClick={handleKeyPoints}
                 disabled={loading || summaryLoading}
               >
                 <div className="quick-action-icon keypoints-icon">
@@ -933,7 +1094,7 @@ export default function Popup() {
               </button>
               <button
                 className="quick-action-card"
-                onClick={() => handleAsk("Explain Like I'm 5")}
+                onClick={handleExplainLike5}
                 disabled={loading || summaryLoading}
               >
                 <div className="quick-action-icon eli5-icon">
@@ -946,7 +1107,7 @@ export default function Popup() {
               </button>
               <button
                 className="quick-action-card"
-                onClick={() => handleAsk("What are the action items and next steps?")}
+                onClick={handleActionItems}
                 disabled={loading || summaryLoading}
               >
                 <div className="quick-action-icon actionitems-icon">
