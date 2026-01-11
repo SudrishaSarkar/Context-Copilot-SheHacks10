@@ -6,6 +6,7 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 // Note: In a real setup, you'd copy shared/contracts.ts or use a workspace
 // For hackathon simplicity, we'll define types inline or use a build step
 import type { AskRequest, AskResponse, Citation } from "./types.js";
+import { buildSystemPrompt } from "./prompt.js";
 
 dotenv.config();
 
@@ -68,36 +69,17 @@ async function callGemini(context: string, question: string): Promise<AskRespons
   const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({ model: "gemini-pro" });
 
-  const prompt = `You are a helpful assistant that answers questions based ONLY on the provided text below.
+  // Build the system prompt using the extracted function
+  const prompt = buildSystemPrompt(context, question);
 
-PROVIDED TEXT:
-${context}
-
-QUESTION: ${question}
-
-INSTRUCTIONS:
-1. Answer the question using ONLY information from the provided text above.
-2. If the answer cannot be found in the provided text, respond with: "I cannot find the answer to this question in the provided content."
-3. For each key piece of information in your answer, include a citation with a verbatim quote from the provided text.
-4. Quotes MUST be exact substrings from the provided text - do not paraphrase or modify them.
-5. Return your response as a JSON object matching this exact structure:
-{
-  "answer": "Your answer here",
-  "citations": [
-    {
-      "quote": "exact verbatim quote from provided text",
-      "sectionHint": "optional section hint",
-      "confidence": 0.95
-    }
-  ]
-}
-
-Return ONLY the JSON object, no markdown formatting, no explanation, just the raw JSON.`;
+  console.log(`[Gemini] Calling API with context length: ${context.length}, question: "${question.substring(0, 50)}..."`);
 
   try {
     const result = await model.generateContent(prompt);
     const response = await result.response;
     const text = response.text();
+    
+    console.log(`[Gemini] Received response, length: ${text.length}`);
 
     // Try to extract JSON from the response
     let jsonText = text.trim();
@@ -141,29 +123,40 @@ Return ONLY the JSON object, no markdown formatting, no explanation, just the ra
 
 app.post("/ask", async (req, res) => {
   try {
+    console.log("[API] Received /ask request");
+    
     const validated = AskRequestSchema.parse(req.body);
     const { question, page } = validated as AskRequest;
+
+    console.log(`[API] Processing question: "${question}" for page: ${page.url}`);
+    console.log(`[API] Page has selectedText: ${!!page.selectedText}, mainText length: ${page.mainText.length}`);
 
     let context: string;
 
     // If selectedText exists and is non-empty, prioritize it
     if (page.selectedText && page.selectedText.trim().length > 0) {
       context = page.selectedText;
+      console.log(`[API] Using selected text, length: ${context.length}`);
     } else {
       // Chunk and select top chunks
       context = selectTopChunks(page.mainText, question, 6);
+      console.log(`[API] Using chunked main text, length: ${context.length}`);
     }
 
     // Limit context size to avoid token limits
     if (context.length > 80000) {
       context = context.substring(0, 80000);
+      console.log(`[API] Truncated context to 80000 characters`);
     }
 
     const response = await callGemini(context, question);
+    
+    console.log(`[API] Returning answer with ${response.citations.length} citations`);
     res.json(response);
   } catch (error) {
-    console.error("Error in /ask:", error);
+    console.error("[API] Error in /ask:", error);
     if (error instanceof z.ZodError) {
+      console.error("[API] Validation error:", error.errors);
       res.status(400).json({ error: "Invalid request", details: error.errors });
     } else {
       res.status(500).json({ error: "Internal server error" });

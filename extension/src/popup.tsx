@@ -29,16 +29,33 @@ export default function Popup() {
       }
 
       // Send message to content script to get page payload
-      const pagePayload = await chrome.tabs.sendMessage<ExtensionMessage, PagePayload>(
-        tab.id,
-        { type: "GET_PAGE_PAYLOAD" }
-      );
-
-      if (!pagePayload) {
-        throw new Error("Failed to get page content");
+      console.log("[Extension] Requesting page payload from content script");
+      
+      let pagePayload: PagePayload;
+      try {
+        pagePayload = await chrome.tabs.sendMessage<ExtensionMessage, PagePayload>(
+          tab.id,
+          { type: "GET_PAGE_PAYLOAD" }
+        );
+      } catch (err) {
+        console.error("[Extension] Content script error:", err);
+        throw new Error("Failed to connect to content script. Please refresh the page and try again.");
       }
 
+      if (!pagePayload || !pagePayload.mainText) {
+        throw new Error("Failed to get page content. The page may not have loaded yet.");
+      }
+      
+      console.log("[Extension] Got page payload:", { 
+        url: pagePayload.url, 
+        title: pagePayload.title,
+        mainTextLength: pagePayload.mainText.length,
+        hasSelectedText: !!pagePayload.selectedText 
+      });
+
       // Send request to backend
+      console.log("[Extension] Sending request to backend:", { question: question.trim(), url: pagePayload.url });
+      
       const response = await fetch(API_URL, {
         method: "POST",
         headers: {
@@ -51,15 +68,29 @@ export default function Popup() {
       });
 
       if (!response.ok) {
-        throw new Error(`Server error: ${response.statusText}`);
+        const errorData = await response.json().catch(() => ({ error: response.statusText }));
+        console.error("[Extension] Server error:", errorData);
+        throw new Error(
+          errorData.error || `Server error: ${response.status} ${response.statusText}`
+        );
       }
 
       const data: AskResponse = await response.json();
+      console.log("[Extension] Received response:", { answerLength: data.answer.length, citationsCount: data.citations.length });
+      
       setAnswer(data.answer);
       setCitations(data.citations || []);
     } catch (err) {
-      console.error("Error:", err);
-      setError(err instanceof Error ? err.message : "Failed to get answer");
+      console.error("[Extension] Error:", err);
+      
+      // Provide more helpful error messages
+      if (err instanceof TypeError && err.message.includes("fetch")) {
+        setError("Cannot connect to server. Make sure the backend is running on http://localhost:8787");
+      } else if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError("Failed to get answer. Please try again.");
+      }
     } finally {
       setLoading(false);
     }
