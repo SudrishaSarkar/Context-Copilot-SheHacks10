@@ -9,6 +9,13 @@ import path from "path";
 import os from "os";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
+// Feature handlers
+import { handleSummarize } from "./features/summarize/handler.js";
+import { handleKeyPoints } from "./features/key-points/handler.js";
+import { handleExplainLike5 } from "./features/explain-like-5/handler.js";
+import { handleActionItems } from "./features/action-items/handler.js";
+// Schemas
+import { SummarizeRequestSchema, KeyPointsRequestSchema, ExplainLike5RequestSchema, ActionItemsRequestSchema, } from "./utils/schemas.js";
 // Ensure .env is loaded from the correct directory (try multiple paths)
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -60,7 +67,9 @@ const AskRequestSchema = z.object({
         imageBase64: z.string().optional(),
     }),
 });
-const SummarizeRequestSchema = z.object({
+// Legacy schema for old endpoints that use "format" instead of "detailLevel"
+// (kept for backward compatibility with /summarize-and-export and /preview)
+const LegacySummarizeRequestSchema = z.object({
     page: z.object({
         url: z.string(),
         title: z.string(),
@@ -125,7 +134,7 @@ async function callGemini(context, question) {
     }
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
-    const prompt = `You are a helpful assistant that answers questions based ONLY on the provided text below.
+    const prompt = `You are a helpful assistant that answers questions based on the provided text below.
 
 PROVIDED TEXT:
 ${context}
@@ -133,16 +142,28 @@ ${context}
 QUESTION: ${question}
 
 INSTRUCTIONS:
-1. Answer the question using ONLY information from the provided text above.
-2. If the answer cannot be found in the provided text, respond with: "I cannot find the answer to this question in the provided content."
-3. For each key piece of information in your answer, include a citation with a verbatim quote from the provided text.
-4. Quotes MUST be exact substrings from the provided text - do not paraphrase or modify them.
-5. Return your response as a JSON object matching this exact structure:
+1. Answer the question using information from the provided text above.
+2. For meta-questions about the content itself, you MUST calculate or estimate even if not explicitly stated. Examples include:
+   - Reading time, word count, length estimates
+   - Number of items (emails, messages, articles, tasks, etc.)
+   - Time estimates (how long to read, reply, complete tasks, etc.)
+   - Structural analysis (sections, topics, organization)
+   - Summary and overview questions
+3. For these meta-questions, use the content to:
+   - Count items (emails, messages, etc.) if visible in the text
+   - Estimate time based on standard rates (e.g., 200 words/min reading, 2-5 min per email reply)
+   - Calculate quantities or provide reasonable estimates
+4. For factual questions that require specific information from the text, only use what's actually in the provided content.
+5. If a factual question cannot be answered from the provided text, respond with: "I cannot find the answer to this question in the provided content."
+6. For each key piece of information in your answer, include a citation with a verbatim quote from the provided text when relevant.
+7. Quotes MUST be exact substrings from the provided text - do not paraphrase or modify them.
+8. For meta-questions (reading time, counts, time estimates, structure), you can provide estimates without citations if the information is calculated.
+9. Return your response as a JSON object matching this exact structure:
 {
   "answer": "Your answer here",
   "citations": [
     {
-      "quote": "exact verbatim quote from provided text",
+      "quote": "exact verbatim quote from provided text (if applicable)",
       "sectionHint": "optional section hint",
       "confidence": 0.95
     }
@@ -187,8 +208,32 @@ Return ONLY the JSON object, no markdown formatting, no explanation, just the ra
     }
     catch (error) {
         console.error("Gemini API error:", error);
+        // Provide more helpful error messages
+        if (error?.status === 403 ||
+            error?.message?.includes("leaked") ||
+            error?.message?.includes("Forbidden")) {
+            return {
+                answer: "API key error: Your Gemini API key has been reported as leaked or is invalid. Please get a new API key from https://makersuite.google.com/app/apikey and update your .env file.",
+                citations: [],
+            };
+        }
+        if (error?.status === 401 ||
+            error?.message?.includes("API key") ||
+            error?.message?.includes("Unauthorized")) {
+            return {
+                answer: "API key error: Please check that your GEMINI_API_KEY is set correctly in the .env file.",
+                citations: [],
+            };
+        }
+        if (error?.message?.includes("quota") ||
+            error?.message?.includes("rate limit")) {
+            return {
+                answer: "API quota exceeded: You've reached the rate limit for the Gemini API. Please try again later.",
+                citations: [],
+            };
+        }
         return {
-            answer: "I encountered an error processing your question. Please try again.",
+            answer: "I encountered an error processing your question. Please try again. If the issue persists, check the server logs for details.",
             citations: [],
         };
     }
@@ -227,12 +272,9 @@ async function callGeminiVision(imageBase64, prompt) {
 // System prompt for summarization/extraction
 function getSummarizePrompt(contentType, format) {
     const formatInstructions = {
-        summary: `Create a comprehensive summary of the document. Focus on:
-- Main topics and themes
-- Key findings or conclusions
-- Important dates, numbers, or figures
-- Critical details that should be remembered
-- Overall purpose or context`,
+        summary: `Create a concise summary with two parts:
+1. Brief Summary (2-4 sentences): Provide a short paragraph covering the main topic, purpose, and most important points.
+2. Key Takeaways: List 3-5 bullet points with the most critical information, important dates/numbers, action items, or essential details.`,
         bullet: `Extract the most important information as bullet points. Include:
 - Main points (use • for main bullets)
 - Sub-points (use - for sub-bullets)
@@ -272,7 +314,8 @@ OUTPUT REQUIREMENTS:
 - Prioritize the most actionable or important information
 - Use clear headings if needed
 - Make it readable and professional
-- Length should be comprehensive but concise (aim for 20-30% of original document length for summary, less for bullets/extract)`;
+- For summary format: Keep it VERY brief - the summary paragraph should be 2-4 sentences maximum, and Key Takeaways should be 3-5 bullet points
+- For other formats: Keep output concise and focused on the most critical information`;
     return basePrompt;
 }
 async function summarizeWithGemini(page, format) {
@@ -483,16 +526,16 @@ Provide a clear, accurate answer and include relevant quotes or references if po
         }
     }
 });
-// New /summarize endpoint
+// Summarize endpoint (modular)
 app.post("/summarize", async (req, res) => {
     try {
         const validated = SummarizeRequestSchema.parse(req.body);
-        const { page, format } = validated;
-        console.log(`Summarizing ${page.contentType} document: "${page.title}" (format: ${format})`);
-        const summary = await summarizeWithGemini(page, format);
+        const { page, detailLevel } = validated;
+        console.log(`Summarizing ${page.contentType} document: "${page.title}" (detailLevel: ${detailLevel})`);
+        const summary = await handleSummarize(page, detailLevel);
         res.json({
             summary,
-            format,
+            detailLevel,
             title: page.title,
             url: page.url,
             timestamp: new Date().toISOString(),
@@ -500,6 +543,87 @@ app.post("/summarize", async (req, res) => {
     }
     catch (error) {
         console.error("Error in /summarize:", error);
+        if (error instanceof z.ZodError) {
+            res.status(400).json({ error: "Invalid request", details: error.errors });
+        }
+        else {
+            res.status(500).json({
+                error: "Internal server error",
+                message: error.message,
+            });
+        }
+    }
+});
+// Key Points endpoint
+app.post("/key-points", async (req, res) => {
+    try {
+        const validated = KeyPointsRequestSchema.parse(req.body);
+        const { page } = validated;
+        console.log(`Extracting key points from ${page.contentType} document: "${page.title}"`);
+        const keyPoints = await handleKeyPoints(page);
+        res.json({
+            keyPoints,
+            title: page.title,
+            url: page.url,
+            timestamp: new Date().toISOString(),
+        });
+    }
+    catch (error) {
+        console.error("Error in /key-points:", error);
+        if (error instanceof z.ZodError) {
+            res.status(400).json({ error: "Invalid request", details: error.errors });
+        }
+        else {
+            res.status(500).json({
+                error: "Internal server error",
+                message: error.message,
+            });
+        }
+    }
+});
+// Explain Like I'm 5 endpoint
+app.post("/explain-like-5", async (req, res) => {
+    try {
+        const validated = ExplainLike5RequestSchema.parse(req.body);
+        const { page } = validated;
+        console.log(`Explaining ${page.contentType} document: "${page.title}" (like I'm 5)`);
+        const explanation = await handleExplainLike5(page);
+        res.json({
+            explanation,
+            title: page.title,
+            url: page.url,
+            timestamp: new Date().toISOString(),
+        });
+    }
+    catch (error) {
+        console.error("Error in /explain-like-5:", error);
+        if (error instanceof z.ZodError) {
+            res.status(400).json({ error: "Invalid request", details: error.errors });
+        }
+        else {
+            res.status(500).json({
+                error: "Internal server error",
+                message: error.message,
+            });
+        }
+    }
+});
+// Action Items endpoint
+app.post("/action-items", async (req, res) => {
+    try {
+        const validated = ActionItemsRequestSchema.parse(req.body);
+        const { page } = validated;
+        console.log(`Extracting action items from ${page.contentType} document: "${page.title}"`);
+        const actionItems = await handleActionItems(page);
+        res.json({
+            actionItems,
+            title: page.title,
+            url: page.url,
+            timestamp: new Date().toISOString(),
+        });
+    }
+    catch (error) {
+        console.error("Error in /action-items:", error);
         if (error instanceof z.ZodError) {
             res.status(400).json({ error: "Invalid request", details: error.errors });
         }
@@ -549,7 +673,7 @@ app.post("/export-pdf", async (req, res) => {
 // Combined summarize + export endpoint (for convenience)
 app.post("/summarize-and-export", async (req, res) => {
     try {
-        const validated = SummarizeRequestSchema.extend({
+        const validated = LegacySummarizeRequestSchema.extend({
             saveToDownloads: z.boolean().default(false),
         }).parse(req.body);
         const { page, format, saveToDownloads } = validated;
@@ -594,7 +718,7 @@ app.post("/preview", async (req, res) => {
     try {
         const { action, ...rest } = req.body;
         if (action === "summarize") {
-            const validated = SummarizeRequestSchema.parse(rest);
+            const validated = LegacySummarizeRequestSchema.parse(rest);
             const { page, format } = validated;
             const summary = await summarizeWithGemini(page, format);
             const pdfBuffer = await generatePDF(summary, page.title, format);
@@ -653,7 +777,10 @@ app.get("/", (req, res) => {
         endpoints: {
             "GET /health": "Health check endpoint",
             "POST /ask": "Ask questions about page content",
-            "POST /summarize": "Summarize/extract/bullet point page content",
+            "POST /summarize": "Summarize page content (brief or detailed)",
+            "POST /key-points": "Extract key takeaways as bullet points",
+            "POST /explain-like-5": "Explain content in simple terms with analogies",
+            "POST /action-items": "Extract actionable items and tasks",
             "POST /export-pdf": "Generate PDF from summary text",
             "POST /summarize-and-export": "Summarize and export to PDF in one call",
             "POST /preview": "Test endpoint for backend preview (use action: 'summarize' or 'ask')",
