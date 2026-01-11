@@ -63,10 +63,15 @@ body {
   cursor: not-allowed;
 }
 
-.ask-button {
-  width: 100%;
+.button-group {
+  display: flex;
+  gap: 8px;
+}
+
+.ask-button,
+.summarize-button {
+  flex: 1;
   padding: 10px 16px;
-  background: #2563eb;
   color: white;
   border: none;
   border-radius: 6px;
@@ -76,13 +81,27 @@ body {
   transition: background 0.2s;
 }
 
+.ask-button {
+  background: #2563eb;
+}
+
 .ask-button:hover:not(:disabled) {
   background: #1d4ed8;
 }
 
-.ask-button:disabled {
+.summarize-button {
+  background: #059669;
+}
+
+.summarize-button:hover:not(:disabled) {
+  background: #047857;
+}
+
+.ask-button:disabled,
+.summarize-button:disabled {
   background: #9ca3af;
   cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .error-message {

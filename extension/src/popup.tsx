@@ -2,11 +2,14 @@ import React, { useState } from "react";
 import type { PagePayload, AskResponse, ExtensionMessage } from "./types";
 
 const API_URL = "http://localhost:8787/ask";
+const SUMMARIZE_API_URL = "http://localhost:8787/summarize";
 
 export default function Popup() {
   const [question, setQuestion] = useState("");
   const [loading, setLoading] = useState(false);
+  const [summaryLoading, setSummaryLoading] = useState(false);
   const [answer, setAnswer] = useState<string | null>(null);
+  const [summary, setSummary] = useState<string | null>(null);
   const [citations, setCitations] = useState<AskResponse["citations"]>([]);
   const [error, setError] = useState<string | null>(null);
 
@@ -65,6 +68,56 @@ export default function Popup() {
     }
   };
 
+  const handleSummarize = async () => {
+    setSummaryLoading(true);
+    setError(null);
+    setSummary(null);
+    setAnswer(null);
+    setCitations([]);
+
+    try {
+      // Get current tab
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab.id) {
+        throw new Error("No active tab found");
+      }
+
+      // Send message to content script to get page payload
+      const pagePayload = await chrome.tabs.sendMessage<ExtensionMessage, PagePayload>(
+        tab.id,
+        { type: "GET_PAGE_PAYLOAD" }
+      );
+
+      if (!pagePayload) {
+        throw new Error("Failed to get page content");
+      }
+
+      // Send request to backend
+      const response = await fetch(SUMMARIZE_API_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          page: pagePayload,
+          format: "summary",
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Server error: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      setSummary(data.summary);
+    } catch (err) {
+      console.error("Error:", err);
+      setError(err instanceof Error ? err.message : "Failed to generate summary");
+    } finally {
+      setSummaryLoading(false);
+    }
+  };
+
   const handleCitationClick = async (quote: string) => {
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -93,23 +146,39 @@ export default function Popup() {
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
             rows={3}
-            disabled={loading}
+            disabled={loading || summaryLoading}
           />
-          <button
-            className="ask-button"
-            onClick={handleAsk}
-            disabled={loading || !question.trim()}
-          >
-            {loading ? "Asking..." : "Ask"}
-          </button>
+          <div className="button-group">
+            <button
+              className="ask-button"
+              onClick={handleAsk}
+              disabled={loading || summaryLoading || !question.trim()}
+            >
+              {loading ? "Asking..." : "Ask"}
+            </button>
+            <button
+              className="summarize-button"
+              onClick={handleSummarize}
+              disabled={loading || summaryLoading}
+            >
+              {summaryLoading ? "Summarizing..." : "Summarize Page"}
+            </button>
+          </div>
         </div>
 
         {error && <div className="error-message">{error}</div>}
 
-        {loading && (
+        {(loading || summaryLoading) && (
           <div className="loading">
             <div className="spinner"></div>
-            <p>Analyzing page content...</p>
+            <p>{loading ? "Analyzing page content..." : "Generating summary..."}</p>
+          </div>
+        )}
+
+        {summary && (
+          <div className="answer-section">
+            <h2>Summary</h2>
+            <div className="answer-text">{summary}</div>
           </div>
         )}
 
