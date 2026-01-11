@@ -3,6 +3,12 @@
   "name": "ContextCopilot",
   "version": "1.0.0",
   "description": "Ask questions about the current webpage with grounded answers and citations",
+  "icons": {
+    "16": "icons/16.png",
+    "32": "icons/32.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  },
   "action": {
     "default_popup": "index.html"
   },
