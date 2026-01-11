@@ -9,16 +9,21 @@ import path from "path";
 import os from "os";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
-import type { AskRequest, AskResponse, Citation, PagePayload } from "./types.js";
+import type {
+  AskRequest,
+  AskResponse,
+  Citation,
+  PagePayload,
+} from "./types.js";
 
 // Ensure .env is loaded from the correct directory (try multiple paths)
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const possiblePaths = [
-  path.resolve(__dirname, "../.env"),           // server/.env (relative to src)
-  path.resolve(process.cwd(), ".env"),          // server/.env (relative to cwd)
-  path.resolve(__dirname, "../../.env"),        // root/.env (fallback)
+  path.resolve(__dirname, "../.env"), // server/.env (relative to src)
+  path.resolve(process.cwd(), ".env"), // server/.env (relative to cwd)
+  path.resolve(__dirname, "../../.env"), // root/.env (fallback)
 ];
 
 let loadedEnvPath = null;
@@ -38,6 +43,10 @@ app.use(cors());
 app.use(express.json({ limit: "50mb" })); // Increase limit for base64 images
 
 const PORT = 8787;
+
+// Gemini model name - can be overridden with GEMINI_MODEL env var
+// Current recommended model: gemini-2.5-flash
+const GEMINI_MODEL = process.env.GEMINI_MODEL ?? "gemini-2.5-flash";
 
 const AskRequestSchema = z.object({
   question: z.string(),
@@ -118,7 +127,11 @@ function scoreChunk(chunk: string, question: string): number {
   return score;
 }
 
-function selectTopChunks(mainText: string, question: string, topN: number = 6): string {
+function selectTopChunks(
+  mainText: string,
+  question: string,
+  topN: number = 6
+): string {
   const chunks = chunkText(mainText, 1800);
   const scored = chunks.map((chunk, idx) => ({
     chunk,
@@ -126,19 +139,25 @@ function selectTopChunks(mainText: string, question: string, topN: number = 6): 
     idx,
   }));
   scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, topN).map((s) => s.chunk).join("\n\n---\n\n");
+  return scored
+    .slice(0, topN)
+    .map((s) => s.chunk)
+    .join("\n\n---\n\n");
 }
 
-async function callGemini(context: string, question: string): Promise<AskResponse> {
+async function callGemini(
+  context: string,
+  question: string
+): Promise<AskResponse> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error("GEMINI_API_KEY not set in environment");
   }
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+  const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
 
-  const prompt = `You are a helpful assistant that answers questions based ONLY on the provided text below.
+  const prompt = `You are a helpful assistant that answers questions based on the provided text below.
 
 PROVIDED TEXT:
 ${context}
@@ -146,16 +165,28 @@ ${context}
 QUESTION: ${question}
 
 INSTRUCTIONS:
-1. Answer the question using ONLY information from the provided text above.
-2. If the answer cannot be found in the provided text, respond with: "I cannot find the answer to this question in the provided content."
-3. For each key piece of information in your answer, include a citation with a verbatim quote from the provided text.
-4. Quotes MUST be exact substrings from the provided text - do not paraphrase or modify them.
-5. Return your response as a JSON object matching this exact structure:
+1. Answer the question using information from the provided text above.
+2. For meta-questions about the content itself, you MUST calculate or estimate even if not explicitly stated. Examples include:
+   - Reading time, word count, length estimates
+   - Number of items (emails, messages, articles, tasks, etc.)
+   - Time estimates (how long to read, reply, complete tasks, etc.)
+   - Structural analysis (sections, topics, organization)
+   - Summary and overview questions
+3. For these meta-questions, use the content to:
+   - Count items (emails, messages, etc.) if visible in the text
+   - Estimate time based on standard rates (e.g., 200 words/min reading, 2-5 min per email reply)
+   - Calculate quantities or provide reasonable estimates
+4. For factual questions that require specific information from the text, only use what's actually in the provided content.
+5. If a factual question cannot be answered from the provided text, respond with: "I cannot find the answer to this question in the provided content."
+6. For each key piece of information in your answer, include a citation with a verbatim quote from the provided text when relevant.
+7. Quotes MUST be exact substrings from the provided text - do not paraphrase or modify them.
+8. For meta-questions (reading time, counts, time estimates, structure), you can provide estimates without citations if the information is calculated.
+9. Return your response as a JSON object matching this exact structure:
 {
   "answer": "Your answer here",
   "citations": [
     {
-      "quote": "exact verbatim quote from provided text",
+      "quote": "exact verbatim quote from provided text (if applicable)",
       "sectionHint": "optional section hint",
       "confidence": 0.95
     }
@@ -172,7 +203,10 @@ Return ONLY the JSON object, no markdown formatting, no explanation, just the ra
     // Try to extract JSON from the response
     let jsonText = text.trim();
     // Remove markdown code blocks if present
-    jsonText = jsonText.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+    jsonText = jsonText
+      .replace(/```json\n?/g, "")
+      .replace(/```\n?/g, "")
+      .trim();
 
     const parsed = JSON.parse(jsonText) as AskResponse;
 
@@ -192,7 +226,10 @@ Return ONLY the JSON object, no markdown formatting, no explanation, just the ra
         if (idx !== -1) {
           // Try to extract the actual quote from context
           const start = Math.max(0, idx - 20);
-          const end = Math.min(context.length, idx + citation.quote.length + 20);
+          const end = Math.min(
+            context.length,
+            idx + citation.quote.length + 20
+          );
           citation.quote = context.substring(start, end).trim();
         }
       }
@@ -200,10 +237,48 @@ Return ONLY the JSON object, no markdown formatting, no explanation, just the ra
     });
 
     return parsed;
-  } catch (error) {
+  } catch (error: any) {
     console.error("Gemini API error:", error);
+
+    // Provide more helpful error messages
+    if (
+      error?.status === 403 ||
+      error?.message?.includes("leaked") ||
+      error?.message?.includes("Forbidden")
+    ) {
+      return {
+        answer:
+          "API key error: Your Gemini API key has been reported as leaked or is invalid. Please get a new API key from https://makersuite.google.com/app/apikey and update your .env file.",
+        citations: [],
+      };
+    }
+
+    if (
+      error?.status === 401 ||
+      error?.message?.includes("API key") ||
+      error?.message?.includes("Unauthorized")
+    ) {
+      return {
+        answer:
+          "API key error: Please check that your GEMINI_API_KEY is set correctly in the .env file.",
+        citations: [],
+      };
+    }
+
+    if (
+      error?.message?.includes("quota") ||
+      error?.message?.includes("rate limit")
+    ) {
+      return {
+        answer:
+          "API quota exceeded: You've reached the rate limit for the Gemini API. Please try again later.",
+        citations: [],
+      };
+    }
+
     return {
-      answer: "I encountered an error processing your question. Please try again.",
+      answer:
+        "I encountered an error processing your question. Please try again. If the issue persists, check the server logs for details.",
       citations: [],
     };
   }
@@ -220,11 +295,11 @@ async function callGeminiVision(
   }
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: "gemini-pro-vision" });
+  const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
 
   // Convert base64 to buffer
   const imageBuffer = Buffer.from(imageBase64, "base64");
-  
+
   // Determine MIME type from base64 prefix
   let mimeType = "image/png";
   if (imageBase64.startsWith("/9j/") || imageBase64.startsWith("iVBORw0KGgo")) {
@@ -254,20 +329,17 @@ function getSummarizePrompt(
   format: "summary" | "bullet" | "extract"
 ): string {
   const formatInstructions = {
-    summary: `Create a comprehensive summary of the document. Focus on:
-- Main topics and themes
-- Key findings or conclusions
-- Important dates, numbers, or figures
-- Critical details that should be remembered
-- Overall purpose or context`,
-    
+    summary: `Create a concise summary with two parts:
+1. Brief Summary (2-4 sentences): Provide a short paragraph covering the main topic, purpose, and most important points.
+2. Key Takeaways: List 3-5 bullet points with the most critical information, important dates/numbers, action items, or essential details.`,
+
     bullet: `Extract the most important information as bullet points. Include:
 - Main points (use • for main bullets)
 - Sub-points (use - for sub-bullets)
 - Key terms, dates, names, figures
 - Action items or important notices
 - Terms and conditions highlights (if applicable)`,
-    
+
     extract: `Extract and organize the most critical information. Structure it as:
 - Executive Summary (2-3 sentences)
 - Key Points (numbered list)
@@ -278,7 +350,13 @@ function getSummarizePrompt(
 
   const basePrompt = `You are an expert document analysis assistant. Your task is to analyze the provided document and create a clear, concise output that makes complex information easy to understand.
 
-DOCUMENT TYPE: ${contentType === "pdf_image" ? "Scanned/Image-based document" : contentType === "pdf_text" ? "Text-based PDF document" : "Web page"}
+DOCUMENT TYPE: ${
+    contentType === "pdf_image"
+      ? "Scanned/Image-based document"
+      : contentType === "pdf_text"
+      ? "Text-based PDF document"
+      : "Web page"
+  }
 
 OUTPUT FORMAT: ${formatInstructions[format]}
 
@@ -298,7 +376,8 @@ OUTPUT REQUIREMENTS:
 - Prioritize the most actionable or important information
 - Use clear headings if needed
 - Make it readable and professional
-- Length should be comprehensive but concise (aim for 20-30% of original document length for summary, less for bullets/extract)`;
+- For summary format: Keep it VERY brief - the summary paragraph should be 2-4 sentences maximum, and Key Takeaways should be 3-5 bullet points
+- For other formats: Keep output concise and focused on the most critical information`;
 
   return basePrompt;
 }
@@ -324,7 +403,7 @@ Please analyze this document image and provide the requested output format.`;
       return await callGeminiVision(page.imageBase64, prompt);
     } else {
       // Use text API for text-based content
-      const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+      const model = genAI.getGenerativeModel({ model: GEMINI_MODEL });
 
       // If selectedText exists, use it; otherwise use mainText (chunked if too long)
       let content = page.selectedText || page.mainText;
@@ -363,7 +442,13 @@ DOCUMENT CONTENT:
 ${content}
 
 PROVIDED TEXT (if applicable):
-${page.structure ? `\nDocument Structure:\n${page.structure.map((s) => `- ${s.title}${s.page ? ` (Page ${s.page})` : ""}`).join("\n")}` : ""}
+${
+  page.structure
+    ? `\nDocument Structure:\n${page.structure
+        .map((s) => `- ${s.title}${s.page ? ` (Page ${s.page})` : ""}`)
+        .join("\n")}`
+    : ""
+}
 
 Please analyze this content and provide the output in the requested format.`;
         const result = await model.generateContent(prompt);
@@ -377,7 +462,11 @@ Please analyze this content and provide the output in the requested format.`;
   }
 }
 
-function generatePDF(summary: string, title: string, format: string): Promise<Buffer> {
+function generatePDF(
+  summary: string,
+  title: string,
+  format: string
+): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     try {
       const doc = new PDFDocument({
@@ -408,7 +497,7 @@ function generatePDF(summary: string, title: string, format: string): Promise<Bu
 
       // Content
       doc.fontSize(12).font("Helvetica");
-      
+
       // Split summary into paragraphs and handle bullet points
       const lines = summary.split("\n");
       let inList = false;
@@ -439,9 +528,13 @@ function generatePDF(summary: string, title: string, format: string): Promise<Bu
               trimmed.startsWith("##") ||
               trimmed.startsWith("#"))
           ) {
-            doc.moveDown(0.5).fontSize(14).font("Helvetica-Bold").text(trimmed, {
-              continued: false,
-            });
+            doc
+              .moveDown(0.5)
+              .fontSize(14)
+              .font("Helvetica-Bold")
+              .text(trimmed, {
+                continued: false,
+              });
             doc.fontSize(12).font("Helvetica").moveDown(0.3);
           } else {
             doc.text(trimmed, { continued: false });
@@ -531,7 +624,9 @@ app.post("/summarize", async (req, res) => {
     const validated = SummarizeRequestSchema.parse(req.body);
     const { page, format } = validated;
 
-    console.log(`Summarizing ${page.contentType} document: "${page.title}" (format: ${format})`);
+    console.log(
+      `Summarizing ${page.contentType} document: "${page.title}" (format: ${format})`
+    );
 
     const summary = await summarizeWithGemini(page, format);
 
@@ -547,7 +642,10 @@ app.post("/summarize", async (req, res) => {
     if (error instanceof z.ZodError) {
       res.status(400).json({ error: "Invalid request", details: error.errors });
     } else {
-      res.status(500).json({ error: "Internal server error", message: (error as Error).message });
+      res.status(500).json({
+        error: "Internal server error",
+        message: (error as Error).message,
+      });
     }
   }
 });
@@ -598,7 +696,9 @@ app.post("/summarize-and-export", async (req, res) => {
     }).parse(req.body);
     const { page, format, saveToDownloads } = validated;
 
-    console.log(`Summarizing and exporting ${page.contentType} document: "${page.title}"`);
+    console.log(
+      `Summarizing and exporting ${page.contentType} document: "${page.title}"`
+    );
 
     // Step 1: Summarize
     const summary = await summarizeWithGemini(page, format);
@@ -609,7 +709,10 @@ app.post("/summarize-and-export", async (req, res) => {
     // Step 3: Save if requested
     let savedPath: string | null = null;
     if (saveToDownloads) {
-      const filename = `${page.title.replace(/[^a-z0-9]/gi, "_")}_${Date.now()}.pdf`;
+      const filename = `${page.title.replace(
+        /[^a-z0-9]/gi,
+        "_"
+      )}_${Date.now()}.pdf`;
       savedPath = savePDFToDownloads(pdfBuffer, filename);
       console.log(`PDF saved to: ${savedPath}`);
     }
@@ -629,7 +732,10 @@ app.post("/summarize-and-export", async (req, res) => {
     if (error instanceof z.ZodError) {
       res.status(400).json({ error: "Invalid request", details: error.errors });
     } else {
-      res.status(500).json({ error: "Internal server error", message: (error as Error).message });
+      res.status(500).json({
+        error: "Internal server error",
+        message: (error as Error).message,
+      });
     }
   }
 });
@@ -638,14 +744,14 @@ app.post("/summarize-and-export", async (req, res) => {
 app.post("/preview", async (req, res) => {
   try {
     const { action, ...rest } = req.body;
-    
+
     if (action === "summarize") {
       const validated = SummarizeRequestSchema.parse(rest);
       const { page, format } = validated;
-      
+
       const summary = await summarizeWithGemini(page, format);
       const pdfBuffer = await generatePDF(summary, page.title, format);
-      
+
       return res.json({
         success: true,
         action: "summarize",
@@ -654,27 +760,28 @@ app.post("/preview", async (req, res) => {
         title: page.title,
         summaryLength: summary.length,
         pdfSize: pdfBuffer.length,
-        preview: summary.substring(0, 500) + (summary.length > 500 ? "..." : ""),
+        preview:
+          summary.substring(0, 500) + (summary.length > 500 ? "..." : ""),
       });
     }
-    
+
     if (action === "ask") {
       const validated = AskRequestSchema.parse(rest);
       const { question, page } = validated;
-      
+
       let context: string;
       if (page.selectedText && page.selectedText.trim().length > 0) {
         context = page.selectedText;
       } else {
         context = selectTopChunks(page.mainText, question, 6);
       }
-      
+
       if (context.length > 80000) {
         context = context.substring(0, 80000);
       }
-      
+
       const response = await callGemini(context, question);
-      
+
       return res.json({
         success: true,
         action: "ask",
@@ -684,14 +791,17 @@ app.post("/preview", async (req, res) => {
         citations: response.citations,
       });
     }
-    
+
     res.status(400).json({ error: "Invalid action. Use 'summarize' or 'ask'" });
   } catch (error) {
     console.error("Error in /preview:", error);
     if (error instanceof z.ZodError) {
       res.status(400).json({ error: "Invalid request", details: error.errors });
     } else {
-      res.status(500).json({ error: "Internal server error", message: (error as Error).message });
+      res.status(500).json({
+        error: "Internal server error",
+        message: (error as Error).message,
+      });
     }
   }
 });
@@ -705,7 +815,8 @@ app.get("/", (req, res) => {
       "POST /summarize": "Summarize/extract/bullet point page content",
       "POST /export-pdf": "Generate PDF from summary text",
       "POST /summarize-and-export": "Summarize and export to PDF in one call",
-      "POST /preview": "Test endpoint for backend preview (use action: 'summarize' or 'ask')",
+      "POST /preview":
+        "Test endpoint for backend preview (use action: 'summarize' or 'ask')",
     },
   });
 });
@@ -717,19 +828,27 @@ app.get("/health", (req, res) => {
 app.listen(PORT, () => {
   console.log(`ContextCopilot server running on http://localhost:${PORT}`);
   console.log(`Environment: ${process.env.NODE_ENV || "development"}`);
-  
+
   if (!process.env.GEMINI_API_KEY) {
     console.error("\n❌ ERROR: GEMINI_API_KEY is missing!");
     console.error("   I looked for the .env file in these locations:");
-    possiblePaths.forEach(p => {
-        const exists = fs.existsSync(p);
-        console.error(`   - ${p} [${exists ? "FOUND" : "NOT FOUND"}]`);
+    possiblePaths.forEach((p) => {
+      const exists = fs.existsSync(p);
+      console.error(`   - ${p} [${exists ? "FOUND" : "NOT FOUND"}]`);
     });
     console.error("\n   TROUBLESHOOTING:");
-    console.error("   1. If it says [FOUND], check if GEMINI_API_KEY is spelled correctly inside.");
-    console.error("   2. If all say [NOT FOUND], ensure the file is named exactly '.env' (not .env.txt).");
+    console.error(
+      "   1. If it says [FOUND], check if GEMINI_API_KEY is spelled correctly inside."
+    );
+    console.error(
+      "   2. If all say [NOT FOUND], ensure the file is named exactly '.env' (not .env.txt)."
+    );
   } else {
-    console.log(`✓ GEMINI_API_KEY is set (loaded from ${loadedEnvPath || "process environment"})`);
+    console.log(
+      `✓ GEMINI_API_KEY is set (loaded from ${
+        loadedEnvPath || "process environment"
+      })`
+    );
     console.log("\n🚀 Server is ready and waiting for requests...");
   }
 });

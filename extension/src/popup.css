@@ -150,15 +150,42 @@ body {
   color: #111827;
 }
 
+/* Special styling for Summary heading */
+.answer-section:has(.summary-text) h2 {
+  color: #059669;
+  font-size: 18px;
+  margin-bottom: 16px;
+  padding-bottom: 8px;
+  border-bottom: 2px solid #d1fae5;
+}
+
 .answer-text {
   padding: 16px;
   background: #f9fafb;
   border-radius: 6px;
-  line-height: 1.6;
+  line-height: 1.8;
   color: #374151;
   margin-bottom: 20px;
   white-space: pre-wrap;
+  font-size: 14px;
+  text-align: left;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
 }
+
+/* Enhanced styling for summary text */
+.summary-text {
+  padding: 20px;
+  background: linear-gradient(to bottom, #ffffff, #f9fafb);
+  border: 1px solid #e5e7eb;
+  border-left: 4px solid #059669;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+  line-height: 1.9;
+  font-size: 14px;
+  color: #1f2937;
+}
+
 
 .citations-section {
   margin-top: 24px;
