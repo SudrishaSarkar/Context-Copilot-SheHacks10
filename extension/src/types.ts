@@ -1,33 +1,16 @@
-// Shared types matching shared/contracts.ts
-// In a production setup, this would import from the shared directory
+export type ExtensionMessage =
+  | { type: "GET_PAGE_PAYLOAD" }
+  | { type: "HIGHLIGHT_QUOTE"; quote: string };
+
 export interface PagePayload {
   url: string;
   title: string;
-  contentType: "html" | "pdf_text" | "pdf_image";
-  selectedText?: string;
-  mainText: string;
-  structure?: { 
-    id: string; 
-    title: string;
-    startChar?: number;
-    endChar?: number;
-    page?: number;
-  }[];
-  meta?: {
-    siteHint?: "github" | "stackoverflow" | "generic";
-    timestamp?: number;
-  };
-}
-
-export interface AskRequest {
-  question: string;
-  page: PagePayload;
+  text: string;
 }
 
 export interface Citation {
   quote: string;
-  sectionHint?: string;
-  confidence?: number;
+  source?: string; // optional if your backend includes it
 }
 
 export interface AskResponse {
@@ -35,6 +18,3 @@ export interface AskResponse {
   citations: Citation[];
 }
 
-export type ExtensionMessage =
-  | { type: "GET_PAGE_PAYLOAD" }
-  | { type: "HIGHLIGHT_QUOTE"; quote: string };
