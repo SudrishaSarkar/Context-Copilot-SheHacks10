@@ -10,6 +10,7 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null)
   const [filter, setFilter] = useState<string>('all')
   const [searchQuery, setSearchQuery] = useState('')
+  const [lastRefresh, setLastRefresh] = useState<Date>(new Date())
 
   // Get userId from URL params or localStorage
   useEffect(() => {
@@ -33,28 +34,55 @@ export default function Dashboard() {
   }, [])
 
   // Fetch session and history when userId is available
+  const fetchData = async () => {
+    if (!userId) {
+      setError(null) // Don't show error, just show empty state
+      setLoading(false)
+      return
+    }
+
+    setLoading(true)
+    setError(null) // Clear any previous errors
+    try {
+      const [sessionData, historyData] = await Promise.all([
+        getSession(userId).catch((err) => {
+          console.error('Failed to fetch session:', err)
+          return null // Return null instead of throwing
+        }),
+        getHistory(userId, { limit: 100, requestType: filter !== 'all' ? filter : undefined, search: searchQuery || undefined }).catch((err) => {
+          console.error('Failed to fetch history:', err)
+          // If it's a network error (backend not running), return empty array
+          // Otherwise, return empty array to show empty state
+          return { history: [], total: 0, limit: 100, offset: 0 }
+        })
+      ])
+      setSession(sessionData)
+      setHistory(historyData?.history || [])
+      setLastRefresh(new Date())
+    } catch (err) {
+      // Silently handle errors - just show empty state
+      console.error('Failed to fetch data:', err)
+      setHistory([])
+      setSession(null)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // Initial fetch and auto-refresh
   useEffect(() => {
     if (!userId) return
 
-    const fetchData = async () => {
-      setLoading(true)
-      setError(null)
-      try {
-        const [sessionData, historyData] = await Promise.all([
-          getSession(userId).catch(() => null),
-          getHistory(userId, { limit: 100, requestType: filter !== 'all' ? filter : undefined, search: searchQuery || undefined })
-        ])
-        setSession(sessionData)
-        setHistory(historyData.history || [])
-      } catch (err) {
-        console.error('Failed to fetch data:', err)
-        setError(err instanceof Error ? err.message : 'Failed to load data')
-      } finally {
-        setLoading(false)
-      }
-    }
-
+    // Fetch immediately
     fetchData()
+
+    // Set up auto-refresh every 5 seconds to get new prompts/outputs
+    const refreshInterval = setInterval(() => {
+      fetchData()
+    }, 5000) // Refresh every 5 seconds
+
+    // Cleanup interval on unmount
+    return () => clearInterval(refreshInterval)
   }, [userId, filter, searchQuery])
 
   const formatDate = (dateString: string) => {
@@ -108,7 +136,7 @@ export default function Dashboard() {
       <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
         <div className="px-4 py-6 sm:px-0">
           {/* Stats Section */}
-          {session && (
+          {session && session.stats.totalInteractions > 0 && (
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
               <div className="bg-white rounded-lg shadow p-4">
                 <h3 className="text-sm font-medium text-gray-500">Total Interactions</h3>
@@ -141,7 +169,15 @@ export default function Dashboard() {
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 />
               </div>
-              <div className="flex gap-2">
+              <div className="flex gap-2 items-center">
+                <button
+                  onClick={fetchData}
+                  disabled={loading}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Refresh data"
+                >
+                  {loading ? 'Refreshing...' : '🔄 Refresh'}
+                </button>
                 {['all', 'ask', 'summarize', 'key-points', 'explain-like-5', 'action-items'].map((f) => (
                   <button
                     key={f}
@@ -157,6 +193,9 @@ export default function Dashboard() {
                 ))}
               </div>
             </div>
+            <div className="mt-2 text-xs text-gray-500">
+              Auto-refreshing every 5 seconds • Last updated: {lastRefresh.toLocaleTimeString()}
+            </div>
           </div>
 
           {/* History List */}
@@ -164,13 +203,22 @@ export default function Dashboard() {
             <div className="bg-white rounded-lg shadow p-8 text-center">
               <p className="text-gray-500">Loading history...</p>
             </div>
-          ) : error ? (
-            <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-              <p className="text-red-800">{error}</p>
-            </div>
           ) : history.length === 0 ? (
             <div className="bg-white rounded-lg shadow p-8 text-center">
-              <p className="text-gray-500">No history found. Start using the extension to see your interactions here!</p>
+              <div className="max-w-md mx-auto">
+                <div className="mb-4">
+                  <svg className="mx-auto h-16 w-16 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                </div>
+                <h3 className="text-lg font-semibold text-gray-900 mb-2">Your dashboard is empty</h3>
+                <p className="text-gray-500 mb-4">
+                  Start using the ContextCopilot extension to see your interactions, summaries, and key points here!
+                </p>
+                <p className="text-sm text-gray-400">
+                  The dashboard will automatically update as you use the extension.
+                </p>
+              </div>
             </div>
           ) : (
             <div className="space-y-4">

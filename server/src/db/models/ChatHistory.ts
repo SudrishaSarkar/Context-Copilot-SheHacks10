@@ -76,9 +76,11 @@ const ChatHistorySchema = new Schema<IChatHistory>(
   { collection: "chat_history" }
 );
 
-// Indexes for faster queries
-ChatHistorySchema.index({ userId: 1, timestamp: -1 });
-ChatHistorySchema.index({ userId: 1, requestType: 1 });
+// Indexes for faster queries - optimized for dashboard queries
+ChatHistorySchema.index({ userId: 1, timestamp: -1 }); // Main query: get user's history sorted by time
+ChatHistorySchema.index({ userId: 1, requestType: 1, timestamp: -1 }); // Filtered queries by type
+ChatHistorySchema.index({ userId: 1, pageTitle: "text", pageUrl: "text" }); // Text search optimization
+ChatHistorySchema.index({ timestamp: -1 }); // Global timestamp index for sorting
 
 export const ChatHistory = mongoose.model<IChatHistory>(
   "ChatHistory",

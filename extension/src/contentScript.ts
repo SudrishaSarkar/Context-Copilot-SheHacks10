@@ -628,20 +628,23 @@ function highlightQuote(quote: string): void {
   }
 }
 
-// Message listener
+// Message listener - MUST be at top level for Chrome to register it
 chrome.runtime.onMessage.addListener(
   (message: ExtensionMessage, sender, sendResponse) => {
     if (message.type === "GET_PAGE_PAYLOAD") {
       // Async response needed for PDF extraction
       getPagePayload()
-        .then((payload) => sendResponse(payload))
+        .then((payload) => {
+          sendResponse(payload);
+        })
         .catch((error) => {
           console.error("Error getting page payload:", error);
+          // Always send a response, even on error
           sendResponse({
             url: location.href,
             title: document.title,
             contentType: "html" as const,
-            mainText: document.body.textContent || "",
+            mainText: document.body?.textContent || "",
             meta: { timestamp: Date.now() },
           });
         });
@@ -657,3 +660,6 @@ chrome.runtime.onMessage.addListener(
     return false;
   }
 );
+
+// Log that content script has loaded (for debugging)
+console.log("✅ ContextCopilot content script loaded");

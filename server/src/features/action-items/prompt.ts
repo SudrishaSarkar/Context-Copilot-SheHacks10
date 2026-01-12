@@ -17,13 +17,12 @@ export function getActionItemsPrompt(
 
 DOCUMENT TYPE: ${documentType}
 
-OUTPUT FORMAT: Provide a checklist of action items. Each item should include:
-- The specific task or action to be taken
-- Who is responsible (if mentioned)
-- Deadlines or due dates (if mentioned)
-- Any important context or requirements
+OUTPUT FORMAT: You MUST format your response as a clean checklist of bullet points. Each line should start with a bullet character (•) followed by a space.
 
-Format as a checklist using - or • for each item. Structure each item clearly.
+Example format:
+• Task description here (Due: Date if mentioned)
+• Another action item with responsible party if mentioned
+• Third task with deadline and context
 
 INSTRUCTIONS:
 1. Analyze the entire document thoroughly
@@ -34,11 +33,16 @@ INSTRUCTIONS:
 6. Include important context for each action item
 
 OUTPUT REQUIREMENTS:
-- Format as a checklist (use - or • for each item)
+- MUST format as bullet points: each line must start with "• " (bullet character + space)
+- NO sub-bullets or nested points (only top-level bullets)
+- NO paragraph text, NO headers, NO other formatting - ONLY bullet points
 - Include all action items, tasks, requirements, and to-dos
-- Include deadlines/dates if present in the document
-- Include responsible parties if mentioned
+- Include deadlines/dates if present in the document (format: "Due: [date]")
+- Include responsible parties if mentioned (format: "Assigned to: [name]")
 - Be specific and clear about what needs to be done
-- If no action items are found, state "No action items found in this document"
-- Make it scannable and actionable`;
+- If no action items are found, output: "• No action items found in this document"
+- Make it scannable and actionable
+- Start each bullet point on a new line with "• "
+- IMPORTANT: Do NOT use markdown formatting (no asterisks, no bold, no italics)
+- Use plain text only with bullet points`;
 }

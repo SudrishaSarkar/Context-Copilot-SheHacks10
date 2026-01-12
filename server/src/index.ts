@@ -61,15 +61,21 @@ for (const p of possiblePaths) {
 }
 
 const app = express();
-// CORS configuration - allow dashboard (port 3002) and extension
+// CORS configuration - allow dashboard (ports 3002, 3003, 3004) and extension
 app.use(
   cors({
     origin: [
       "http://localhost:3002",
       "http://127.0.0.1:3002",
-      "chrome-extension://*",
+      "http://localhost:3003",
+      "http://127.0.0.1:3003",
+      "http://localhost:3004",
+      "http://127.0.0.1:3004",
+      /^chrome-extension:\/\/.*/,
     ],
     credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
 app.use(express.json({ limit: "50mb" })); // Increase limit for base64 images
@@ -206,24 +212,32 @@ QUESTION: ${question}
 
 INSTRUCTIONS:
 1. Answer the question using information from the provided text above.
-2. For meta-questions about the content itself, you MUST calculate or estimate even if not explicitly stated. Examples include:
+2. Structure your answer clearly and logically.
+3. For meta-questions about the content itself, you MUST calculate or estimate even if not explicitly stated. Examples include:
    - Reading time, word count, length estimates
    - Number of items (emails, messages, articles, tasks, etc.)
    - Time estimates (how long to read, reply, complete tasks, etc.)
    - Structural analysis (sections, topics, organization)
    - Summary and overview questions
-3. For these meta-questions, use the content to:
+4. For these meta-questions, use the content to:
    - Count items (emails, messages, etc.) if visible in the text
    - Estimate time based on standard rates (e.g., 200 words/min reading, 2-5 min per email reply)
    - Calculate quantities or provide reasonable estimates
-4. For factual questions that require specific information from the text, only use what's actually in the provided content.
-5. If a factual question cannot be answered from the provided text, respond with: "I cannot find the answer to this question in the provided content."
-6. For each key piece of information in your answer, include a citation with a verbatim quote from the provided text when relevant.
-7. Quotes MUST be exact substrings from the provided text - do not paraphrase or modify them.
-8. For meta-questions (reading time, counts, time estimates, structure), you can provide estimates without citations if the information is calculated.
-9. Return your response as a JSON object matching this exact structure:
+5. For factual questions that require specific information from the text, only use what's actually in the provided content.
+6. If a factual question cannot be answered from the provided text, respond with: "I cannot find the answer to this question in the provided content."
+7. For each key piece of information in your answer, include a citation with a verbatim quote from the provided text when relevant.
+8. Quotes MUST be exact substrings from the provided text - do not paraphrase or modify them.
+9. For meta-questions (reading time, counts, time estimates, structure), you can provide estimates without citations if the information is calculated.
+10. Structure your answer clearly:
+    - Start with a direct answer to the question
+    - Provide supporting details or context if needed
+    - Break down complex answers into clear points
+    - Use clear, concise language
+    - Organize information logically
+
+OUTPUT FORMAT: Return your response as a JSON object matching this exact structure:
 {
-  "answer": "Your answer here",
+  "answer": "Your structured answer here. Make it clear, well-organized, and easy to understand. Break down complex information into logical sections if needed.",
   "citations": [
     {
       "quote": "exact verbatim quote from provided text (if applicable)",
@@ -233,7 +247,9 @@ INSTRUCTIONS:
   ]
 }
 
-Return ONLY the JSON object, no markdown formatting, no explanation, just the raw JSON.`;
+      Return ONLY the JSON object, no markdown formatting, no explanation, just the raw JSON.
+      
+      IMPORTANT: Do NOT use asterisks, bold, italics, or any markdown formatting in your answer text. Use plain text only.`;
 
   try {
     const result = await model.generateContent(prompt);
@@ -835,6 +851,15 @@ app.post("/summarize", async (req, res) => {
       sessionId = await getOrCreateSession(userId);
     }
 
+    // Validate that we have content to process
+    if (!page.mainText || page.mainText.trim().length === 0) {
+      return res.status(400).json({
+        error: "No content available",
+        message:
+          "The page has no text content to summarize. Please ensure the content script is loaded and the page has readable content.",
+      });
+    }
+
     const summary = await handleSummarize(page, detailLevel);
 
     const response = {
@@ -894,6 +919,15 @@ app.post("/key-points", async (req, res) => {
     // Get or create session if userId provided
     if (userId) {
       sessionId = await getOrCreateSession(userId);
+    }
+
+    // Validate that we have content to process
+    if (!page.mainText || page.mainText.trim().length === 0) {
+      return res.status(400).json({
+        error: "No content available",
+        message:
+          "The page has no text content to extract key points from. Please ensure the content script is loaded and the page has readable content.",
+      });
     }
 
     const keyPoints = await handleKeyPoints(page);
@@ -1012,6 +1046,15 @@ app.post("/action-items", async (req, res) => {
     // Get or create session if userId provided
     if (userId) {
       sessionId = await getOrCreateSession(userId);
+    }
+
+    // Validate that we have content to process
+    if (!page.mainText || page.mainText.trim().length === 0) {
+      return res.status(400).json({
+        error: "No content available",
+        message:
+          "The page has no text content to extract action items from. Please ensure the content script is loaded and the page has readable content.",
+      });
     }
 
     const actionItems = await handleActionItems(page);
@@ -1148,14 +1191,17 @@ app.delete("/api/history/:userId/:historyId", async (req, res) => {
   }
 });
 
-// Get user stats
+// Get user stats (auto-creates session if it doesn't exist)
 app.get("/api/sessions/:userId", async (req, res) => {
   try {
     const { userId } = req.params;
 
+    // Auto-create session if it doesn't exist (for first-time users)
+    await getOrCreateSession(userId);
     const session = await Session.findOne({ userId });
     if (!session) {
-      return res.status(404).json({ error: "Session not found" });
+      // This should never happen after getOrCreateSession, but handle it just in case
+      return res.status(500).json({ error: "Failed to create session" });
     }
 
     const totalInteractions = await ChatHistory.countDocuments({ userId });
@@ -1318,52 +1364,8 @@ app.delete("/api/history/:userId/:historyId", async (req, res) => {
   }
 });
 
-// Get user stats
-app.get("/api/sessions/:userId", async (req, res) => {
-  try {
-    const { userId } = req.params;
-
-    const session = await Session.findOne({ userId });
-    if (!session) {
-      return res.status(404).json({ error: "Session not found" });
-    }
-
-    const totalInteractions = await ChatHistory.countDocuments({ userId });
-    const requestTypeStats = await ChatHistory.aggregate([
-      { $match: { userId } },
-      { $group: { _id: "$requestType", count: { $sum: 1 } } },
-    ]);
-
-    const stats = {
-      requestTypeBreakdown: requestTypeStats.reduce(
-        (acc: Record<string, number>, item: { _id: string; count: number }) => {
-          acc[item._id] = item.count;
-          return acc;
-        },
-        {} as Record<string, number>
-      ),
-    };
-
-    res.json({
-      session: {
-        userId: session.userId,
-        email: session.email,
-        createdAt: session.createdAt,
-        lastActive: session.lastActive,
-      },
-      stats: {
-        totalInteractions,
-        ...stats,
-      },
-    });
-  } catch (error) {
-    console.error("Error fetching session:", error);
-    res.status(500).json({
-      error: "Internal server error",
-      message: (error as Error).message,
-    });
-  }
-});
+// Get user stats (DUPLICATE REMOVED - see first definition above)
+// This duplicate endpoint has been removed to prevent conflicts
 
 // Create or get session
 app.post("/api/sessions", async (req, res) => {

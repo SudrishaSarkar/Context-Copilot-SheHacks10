@@ -71,12 +71,17 @@ export const VoiceMic: React.FC<VoiceMicProps> = ({ onTranscript }) => {
       }
 
       const data = await response.json();
-      if (data.transcript) {
+      console.log("Transcription response:", data);
+      if (data.transcript && data.transcript.trim()) {
+        console.log("Calling onTranscript with:", data.transcript);
         onTranscript(data.transcript);
+      } else {
+        console.warn("Empty or missing transcript in response:", data);
+        alert("No transcript received. Please try recording again.");
       }
     } catch (error) {
       console.error("Transcription failed:", error);
-      alert("Transcription failed. Check console for details.");
+      alert(`Transcription failed: ${error instanceof Error ? error.message : "Unknown error"}`);
     }
   };
 

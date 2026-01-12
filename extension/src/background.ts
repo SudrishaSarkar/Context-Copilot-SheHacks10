@@ -1,13 +1,17 @@
 // Background service worker for Manifest V3
 // Minimal implementation - all logic is in content script and popup
 
-chrome.runtime.onInstalled.addListener(() => {
-  console.log("ContextCopilot extension installed");
+console.log("✅ ContextCopilot extension installed");
+
+// Listen for extension installation/update
+chrome.runtime.onInstalled.addListener((details) => {
+  if (details.reason === "install" || details.reason === "update") {
+    console.log("ContextCopilot extension installed/updated:", details.reason);
+  }
 });
 
-// Keep service worker alive if needed
-chrome.runtime.onConnect.addListener((port) => {
-  port.onDisconnect.addListener(() => {
-    console.log("Port disconnected");
-  });
+// Listen for messages from content scripts or popup
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Handle any background-level messages if needed
+  return false;
 });

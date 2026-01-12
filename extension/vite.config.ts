@@ -44,12 +44,12 @@ export default defineConfig({
   ],
   build: {
     outDir: "dist",
-    emptyOutDir: true,
+    emptyOutDir: false, // Don't clear - contentScript and background are built separately first
     rollupOptions: {
       input: {
         popup: resolve(__dirname, "index.html"),
-        contentScript: resolve(__dirname, "src/contentScript.ts"),
-        background: resolve(__dirname, "src/background.ts"),
+        // Note: contentScript and background are built separately
+        // See package.json scripts for build:content and build:background
       },
       output: {
         entryFileNames: (chunkInfo) => {
@@ -68,12 +68,9 @@ export default defineConfig({
           return "assets/[name][extname]";
         },
         // Build as IIFE format - required for Chrome extension content scripts
-        // Popup will also work with IIFE in extension context
+        // Note: This will create chunks, but we'll handle them in the plugin
         format: "iife",
         name: "ContextCopilot",
-        // CRITICAL: Inline all dynamic imports to avoid chunk files with import statements
-        // This ensures contentScript.js is a single self-contained IIFE bundle
-        inlineDynamicImports: true,
       },
     },
   },

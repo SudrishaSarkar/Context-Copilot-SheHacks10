@@ -74,11 +74,26 @@ export async function getHistory(
   if (options?.search) params.append("search", options.search);
 
   const response = await fetch(
-    `${API_BASE_URL}/api/history/${userId}?${params.toString()}`
+    `${API_BASE_URL}/api/history/${userId}?${params.toString()}`,
+    {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+      },
+    }
   );
 
   if (!response.ok) {
-    throw new Error(`Failed to fetch history: ${response.statusText}`);
+    const errorText = await response.text();
+    let errorMessage = `Failed to fetch history: ${response.statusText}`;
+    try {
+      const errorJson = JSON.parse(errorText);
+      errorMessage = errorJson.message || errorMessage;
+    } catch {
+      // If not JSON, use the text as is
+      if (errorText) errorMessage = errorText;
+    }
+    throw new Error(errorMessage);
   }
 
   return response.json();
@@ -123,10 +138,23 @@ export async function deleteHistoryEntry(
  * Get user session and statistics
  */
 export async function getSession(userId: string): Promise<SessionResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/sessions/${userId}`);
+  const response = await fetch(`${API_BASE_URL}/api/sessions/${userId}`, {
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
 
   if (!response.ok) {
-    throw new Error(`Failed to fetch session: ${response.statusText}`);
+    const errorText = await response.text();
+    let errorMessage = `Failed to fetch session: ${response.statusText}`;
+    try {
+      const errorJson = JSON.parse(errorText);
+      errorMessage = errorJson.message || errorMessage;
+    } catch {
+      if (errorText) errorMessage = errorText;
+    }
+    throw new Error(errorMessage);
   }
 
   return response.json();

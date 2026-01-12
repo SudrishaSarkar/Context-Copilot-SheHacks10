@@ -207,13 +207,21 @@ export default function Popup() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [activeFilter, setActiveFilter] = useState<HistoryFilter>("all");
   const [selectedHistoryItem, setSelectedHistoryItem] = useState<HistoryItem | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
 
-  // Load theme from localStorage on mount
+  // Load theme and userId from storage on mount
   useEffect(() => {
     const savedTheme = localStorage.getItem("contextcopilot-theme");
     const theme = savedTheme === "dark" ? "dark" : "light";
     setIsDarkMode(theme === "dark");
     document.documentElement.setAttribute("data-theme", theme);
+
+    // Load or generate userId
+    getUserId().then((id) => {
+      setUserId(id);
+    }).catch((err) => {
+      console.error("Failed to get userId:", err);
+    });
   }, []);
 
 
@@ -252,11 +260,20 @@ export default function Popup() {
 
   // Handle voice transcript from VoiceMic component
   const handleVoiceTranscript = (transcript: string) => {
-    setQuestion((prev) => (prev ? prev + " " + transcript : transcript));
+    if (!transcript || !transcript.trim()) {
+      console.warn("Empty transcript received");
+      return;
+    }
+    console.log("Transcript received:", transcript);
+    setQuestion((prev) => {
+      const newQuestion = prev ? prev + " " + transcript.trim() : transcript.trim();
+      console.log("Updated question:", newQuestion);
+      return newQuestion;
+    });
     setAskError(null); // Clear any previous errors
   };
 
-  // Helper function to safely get page payload with retry logic
+  // Helper function to safely get page payload with reliable content script communication
   const getPagePayloadSafe = async (tabId: number, tabUrl?: string, tabTitle?: string): Promise<PagePayload> => {
     // Check if it's a restricted page where content scripts can't run
     if (tabUrl && (tabUrl.startsWith("chrome://") || tabUrl.startsWith("chrome-extension://") || tabUrl.startsWith("edge://") || tabUrl.startsWith("about:"))) {
@@ -264,9 +281,11 @@ export default function Popup() {
     }
 
     // Try to send message to content script (it should be loaded via manifest)
-    // Retry a few times in case the script is still loading
+    // Retry multiple times with increasing delays to handle timing issues
     let lastError: Error | null = null;
-    for (let attempt = 0; attempt < 3; attempt++) {
+    const retryDelays = [100, 200, 300, 500, 800]; // Progressive delays (longer waits)
+    
+    for (let attempt = 0; attempt < retryDelays.length; attempt++) {
       try {
         const pagePayload = await chrome.tabs.sendMessage<ExtensionMessage, PagePayload>(
           tabId,
@@ -277,21 +296,52 @@ export default function Popup() {
         }
       } catch (err) {
         lastError = err as Error;
-        // Wait a bit before retrying (content script might still be loading)
-        if (attempt < 2) {
-          await new Promise(resolve => setTimeout(resolve, 300));
+        // Wait before retrying (with progressive delay)
+        if (attempt < retryDelays.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, retryDelays[attempt]));
         }
       }
     }
 
-    // If all retries failed, create a basic payload from tab info
-    // This allows the extension to work even if content script isn't available
-    console.warn("Content script not available, using fallback payload:", lastError?.message);
+    // If all retries failed, the content script isn't loaded
+    // This happens when:
+    // 1. Page was loaded before extension was installed/reloaded
+    // 2. Content script failed to load due to an error
+    // 
+    // Solution: Extract basic content from the page directly using chrome.scripting
+    // This ensures we always have some content, even if the content script isn't loaded
+    try {
+      const results = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => {
+          return {
+            url: window.location.href,
+            title: document.title,
+            mainText: document.body?.textContent || document.documentElement?.textContent || "",
+          };
+        },
+      });
+      
+      if (results && results[0]?.result) {
+        const extracted = results[0].result;
+        return {
+          url: extracted.url || tabUrl || "",
+          title: extracted.title || tabTitle || "",
+          contentType: "html",
+          mainText: extracted.mainText || "",
+          meta: { timestamp: Date.now() },
+        };
+      }
+    } catch (extractError) {
+      console.warn("Failed to extract page content directly:", extractError);
+    }
+    
+    // Final fallback: return basic info
     return {
       url: tabUrl || "",
       title: tabTitle || "",
       contentType: "html",
-      mainText: "", // Can't get page content without content script
+      mainText: "", // No content available
       meta: { timestamp: Date.now() },
     };
   };
@@ -299,8 +349,11 @@ export default function Popup() {
   const handleAsk = async (promptOverride?: string) => {
     const promptText = promptOverride || question.trim();
     
+    console.log("handleAsk called with:", { promptOverride, question, promptText });
+    
     if (!promptText) {
       setAskError("Please enter a question");
+      console.warn("No prompt text provided");
       return;
     }
 
@@ -572,6 +625,8 @@ export default function Popup() {
       setSummary(formattedKeyPoints);
     } catch (err) {
       console.error("Error:", err);
+      setAskError(err instanceof Error ? err.message : "Failed to extract key points");
+      setSummary(null);
     } finally {
       setSummaryLoading(false);
     }
@@ -612,6 +667,8 @@ export default function Popup() {
       setSummary(formattedExplanation);
     } catch (err) {
       console.error("Error:", err);
+      setAskError(err instanceof Error ? err.message : "Failed to generate explanation");
+      setSummary(null);
     } finally {
       setSummaryLoading(false);
     }
@@ -652,6 +709,8 @@ export default function Popup() {
       setSummary(formattedActionItems);
     } catch (err) {
       console.error("Error:", err);
+      setAskError(err instanceof Error ? err.message : "Failed to extract action items");
+      setSummary(null);
     } finally {
       setSummaryLoading(false);
     }
@@ -1031,9 +1090,14 @@ export default function Popup() {
             {askError && <div className="error-message">{askError}</div>}
             <button
               className="ask-ai-button"
-              onClick={handleAsk}
+              onClick={(e) => {
+                e.preventDefault();
+                console.log("Ask AI button clicked, question:", question);
+                handleAsk();
+              }}
               disabled={loading || summaryLoading || !question.trim()}
               style={{ display: "block" }}
+              title={!question.trim() ? "Please enter a question" : "Ask AI about this page"}
             >
               {loading ? (
                 <>

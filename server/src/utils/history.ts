@@ -76,6 +76,10 @@ export async function saveChatHistory(params: {
   modelUsed?: string;
   success?: boolean;
 }): Promise<mongoose.Types.ObjectId> {
+  // Use insertOne for better performance (bypasses Mongoose validation overhead)
+  // But we'll use create() for now to maintain schema validation
+  // In production, consider using insertOne with writeConcern for better performance
+  
   const history = await ChatHistory.create({
     sessionId: params.sessionId,
     userId: params.userId,
@@ -91,8 +95,10 @@ export async function saveChatHistory(params: {
     success: params.success ?? true,
   });
 
-  // Update page record
-  await updatePageRecord(params.page.url, params.page.title);
+  // Update page record asynchronously (don't block the response)
+  updatePageRecord(params.page.url, params.page.title).catch((err) => {
+    console.error("Failed to update page record:", err);
+  });
 
   return history._id;
 }
