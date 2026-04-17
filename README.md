@@ -181,17 +181,6 @@ For a production setup, use a monorepo tool or shared package to avoid duplicati
 - Clear `node_modules` and reinstall: `rm -rf node_modules pnpm-lock.yaml && pnpm install`
 - Check TypeScript errors: `pnpm tsc --noEmit` in respective directories
 
-## Demo Tips
-
-For a great demo, try these pages:
-
-1. **GitHub README**: Ask "What are the main features?" or "How do I install this?"
-2. **StackOverflow**: Ask "What's the solution?" or "Why doesn't this work?"
-3. **Documentation**: Ask specific questions about API usage or configuration
-4. **Research Paper (PDF)**: If Chrome can render it, ask about key findings or methodology
-
-Remember: The extension works best with text-based content. Images and heavy JavaScript pages may have limited content extraction.
-
 ## License
 
 MIT (Hackathon Project)
