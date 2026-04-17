@@ -1,15 +1,65 @@
 # ContextCopilot
-Screenshots of our product : 
+## Screenshots of our product : 
+
+### AI-Powered Chrome Extension
+
 <img width="634" height="752" alt="image" src="https://github.com/user-attachments/assets/92a8d165-34e1-45b9-9527-df46496686ba" />
+
+### Web-App to store history of past searches and data, including timestamps, original links and stored AI-powered analyses; includes filtering options
 <img width="1831" height="873" alt="image" src="https://github.com/user-attachments/assets/f2cb35cf-df7d-4a4b-a665-13b4a325c453" />
 
 
-A Chrome Extension (Manifest V3) that lets users ask questions about the current webpage (GitHub, StackOverflow, PDFs, rental documents, research papers) and receive answers grounded in the page content, with clickable citations that scroll and highlight the source text.
+Ask questions about any webpage and get answers grounded in its content — with clickable citations that highlight exactly where the answer came from.
+
+ContextCopilot is a Chrome Extension that understands the page you are currently viewing and lets you interact with it using natural language. Instead of copy-pasting content into ChatGPT and losing context, users can ask questions directly and receive accurate, contextual answers instantly.
+
+## The Problem
+
+Modern AI assistants lack awareness of what is on your screen.
+
+As a result:
+
+Users constantly copy-paste content into AI tools
+Context is lost or incomplete
+Answers miss critical details
+Switching between tabs slows down workflow
+
+This creates a hidden productivity tax for developers, students, and professionals.
+
+## The Solution
+
+ContextCopilot brings AI directly into your browsing experience.
+
+On any webpage, it:
+
+Reads visible content from the page
+Understands structure and context
+Answers questions about that specific page
+Provides grounded responses with citations
+Highlights and scrolls to the exact source of information
+
+No copy-pasting. No context switching. Just answers where you need them.
+
+## Where It Works
+
+ContextCopilot is designed to be domain-agnostic and works across:
+
+GitHub repositories and pull requests
+StackOverflow questions and answers
+Documentation and technical guides
+Research papers and PDFs
+Dashboards and long-form content
+Key Features
+Context-aware Q&A on any webpage
+Grounded responses with clickable citations
+Automatic content extraction from the DOM
+Real-time interaction via a Chrome Extension
+Clean UI for seamless user experience
 
 ## Tech Stack
 
 - **Extension**: React + Vite + TypeScript (Manifest V3)
-- **Backend**: Express + TypeScript
+- **Backend**: Node.js + Express (TypeScript)
 - **AI**: Google Gemini API
 
 ## Project Structure
@@ -41,6 +91,12 @@ A Chrome Extension (Manifest V3) that lets users ask questions about the current
     tsconfig.json
     vite.config.ts
 ```
+## My Contributions:
+-Led version control - in charge of resolving merge conflicts and reviewing pull requests before merging
+-Implemented content extraction and interaction with live webpages
+-Developed the Express backend and API integration with Gemini
+-Built citation mapping and highlighting logic for grounded responses
+-Structured the project using shared contracts for type safety
 
 ## Setup Instructions
 
