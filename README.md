@@ -1,4 +1,8 @@
 # ContextCopilot
+Screenshots of our product : 
+<img width="634" height="752" alt="image" src="https://github.com/user-attachments/assets/92a8d165-34e1-45b9-9527-df46496686ba" />
+<img width="1831" height="873" alt="image" src="https://github.com/user-attachments/assets/f2cb35cf-df7d-4a4b-a665-13b4a325c453" />
+
 
 A Chrome Extension (Manifest V3) that lets users ask questions about the current webpage (GitHub, StackOverflow, PDFs, rental documents, research papers) and receive answers grounded in the page content, with clickable citations that scroll and highlight the source text.
 
